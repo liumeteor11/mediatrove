@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useThemeStore, Theme } from '../store/useThemeStore';
 import { useTranslation } from 'react-i18next';
 import { getAIDate } from '../services/aiService';
+import { UpdateButton } from './UpdateButton';
 import clsx from 'clsx';
 
 export const Navbar: React.FC = () => {
@@ -104,7 +105,10 @@ export const Navbar: React.FC = () => {
                 </Link>
               ))}
 
-              
+
+
+              {/* Update Checker */}
+              <UpdateButton />
 
               {/* Language Dropdown */}
               <div className="relative" ref={langDropdownRef}>

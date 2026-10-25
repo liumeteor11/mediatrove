@@ -42,12 +42,20 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the in-app update artifacts (latest.json + *.sig). Generate
+          # with `npx tauri signer generate`; without these the desktop build
+          # fails because createUpdaterArtifacts is enabled in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'MediaTrove ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false
+          # The updater installs the NSIS setup on Windows (MSI has no silent
+          # webview bootstrapping); latest.json should point at that artifact.
+          updaterJsonPreferNsis: true
 
   release-android:
     permissions:

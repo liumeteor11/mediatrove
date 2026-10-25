@@ -25,6 +25,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -37,6 +38,14 @@
         "type": "downloadBootstrapper",
         "silent": true
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENFMUY5QzM1Qjc4MzQ2OEUKUldTT1JvTzNOWndmenI1bXNtZ0tUN2lDUndKZHlhdFl4T3JsT2hTMjdHNFpDcllHd0xNblMvdGoK",
+      "endpoints": [
+        "https://github.com/liumeteor11/mediatrove/releases/latest/download/latest.json"
+      ]
     }
   }
 }
