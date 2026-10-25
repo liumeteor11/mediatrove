@@ -42,7 +42,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENFMUY5QzM1Qjc4MzQ2OEUKUldTT1JvTzNOWndmenI1bXNtZ0tUN2lDUndKZHlhdFl4T3JsT2hTMjdHNFpDcllHd0xNblMvdGoK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2MzcwODhGN0Y4QzlGRDcKUldUWG40eC9qd2czRnRuSlNiUjJwY1R6bFIvZUdLWkVxVEtCd3J4b01RY29jVW5PNHlNZXpHR1AK",
       "endpoints": [
         "https://github.com/liumeteor11/mediatrove/releases/latest/download/latest.json"
       ]

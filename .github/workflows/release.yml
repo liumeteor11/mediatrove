@@ -42,9 +42,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signs the in-app update artifacts (latest.json + *.sig). Generate
-          # with `npx tauri signer generate`; without these the desktop build
-          # fails because createUpdaterArtifacts is enabled in tauri.conf.json.
+          # Signs the in-app update artifacts (latest.json + *.sig). The key
+          # is password-protected, so BOTH env vars must be set — an unset
+          # password makes the CLI prompt interactively (hangs CI), and an
+          # empty string is treated as a wrong password.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
