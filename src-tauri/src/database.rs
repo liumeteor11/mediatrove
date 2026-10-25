@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri::Manager;
-use crate::models::{MediaItem, DistilledCharacter, ChatSession, CollectionData, UserRecord, AIConfig, ThemeConfig};
+use crate::models::{MediaItem, DistilledCharacter, ChatSession, CollectionData, UserRecord, AIConfig, ThemeConfig, McpConfig};
 use std::sync::Mutex;
 
 pub struct Database {
@@ -18,6 +18,22 @@ impl Database {
         }
         let path = app_dir.join("collection.json");
         
+        let data = if path.exists() {
+            let content = fs::read_to_string(&path).unwrap_or_else(|_| "{}".to_string());
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            CollectionData::default()
+        };
+
+        Database {
+            path,
+            cache: Mutex::new(data),
+        }
+    }
+
+    /// Test-only constructor that skips the Tauri AppHandle.
+    #[cfg(test)]
+    pub fn new_at_path(path: PathBuf) -> Self {
         let data = if path.exists() {
             let content = fs::read_to_string(&path).unwrap_or_else(|_| "{}".to_string());
             serde_json::from_str(&content).unwrap_or_default()
@@ -52,8 +68,12 @@ impl Database {
     pub fn add_item_for_user(&self, username: &str, item: MediaItem) -> Result<(), String> {
         let mut data = self.cache.lock().map_err(|e| e.to_string())?;
         let list = data.items_by_user.entry(username.to_string()).or_default();
-        list.retain(|i| i.id != item.id);
-        list.insert(0, item);
+        // Upsert: re-saving an item must keep its position (order changes only
+        // come from reorder_collection); only brand-new items go to the front.
+        match list.iter().position(|i| i.id == item.id) {
+            Some(idx) => list[idx] = item,
+            None => list.insert(0, item),
+        }
         drop(data);
         self.save()
     }
@@ -159,6 +179,17 @@ impl Database {
     pub fn get_configs(&self) -> Result<(Option<AIConfig>, Option<ThemeConfig>), String> {
         let data = self.cache.lock().map_err(|e| e.to_string())?;
         Ok((data.ai_config.clone(), data.theme_config.clone()))
+    }
+
+    pub fn get_mcp_config(&self) -> Option<McpConfig> {
+        self.cache.lock().ok().and_then(|d| d.mcp_config.clone())
+    }
+
+    pub fn set_mcp_config(&self, config: McpConfig) -> Result<(), String> {
+        let mut data = self.cache.lock().map_err(|e| e.to_string())?;
+        data.mcp_config = Some(config);
+        drop(data);
+        self.save()
     }
     
     #[allow(dead_code)]

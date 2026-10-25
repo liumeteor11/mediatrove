@@ -20,6 +20,37 @@ pub struct CollectionData {
     /// Never transmitted as part of sync payloads.
     #[serde(default)]
     pub sync_token: String,
+    /// Local MCP server config (external AI agents read/write the collection).
+    #[serde(default)]
+    pub mcp_config: Option<McpConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_mcp_port")]
+    pub port: u16,
+    #[serde(default = "default_mcp_user")]
+    pub username: String,
+}
+
+fn default_mcp_port() -> u16 {
+    8787
+}
+
+fn default_mcp_user() -> String {
+    "guest".to_string()
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_mcp_port(),
+            username: default_mcp_user(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,7 +254,6 @@ pub struct AIConfig {
     pub model: String,
     #[serde(rename = "baseUrl")]
     pub base_url: String,
-    pub temperature: f32,
     #[serde(rename = "maxTokens")]
     pub max_tokens: i32,
     #[serde(rename = "systemPrompt")]

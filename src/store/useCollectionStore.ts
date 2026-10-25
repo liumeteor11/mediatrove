@@ -165,7 +165,20 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
                 tmdbId: exists.tmdbId ?? item.tmdbId,
                 tmdbMediaType: exists.tmdbMediaType ?? item.tmdbMediaType
             };
-            updatedCollection = state.collection.map(c => c.id === exists.id ? newItem : c);
+            // Re-adding an existing title means the user is actively engaging with
+            // it, so surface it at the top like a fresh add. When it lives inside
+            // a collection folder, bump the folder itself so the whole series
+            // moves forward while the season stays in place among its siblings.
+            const parent = exists.parentCollectionId
+                ? state.collection.find(c => c.id === exists.parentCollectionId)
+                : undefined;
+            const anchorItem = (exists.isCollection || !parent) ? newItem : parent;
+            updatedCollection = [
+                anchorItem,
+                ...state.collection
+                    .filter(c => c.id !== anchorItem.id)
+                    .map(c => (c.id === exists.id ? newItem : c))
+            ];
         } else {
             newItem = { ...item, category, savedAt: now, lastEditedAt: now };
             updatedCollection = [ newItem, ...state.collection ];
@@ -174,7 +187,11 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
         // Persist
         if (isTauri) {
             const username = useAuthStore.getState().user?.username || 'guest';
-            invoke('save_item', { username, item: newItem }).catch(console.error);
+            // save_item only upserts data; send the full order afterwards so the
+            // bumped item (or its parent folder) is stored at the front as well.
+            invoke('save_item', { username, item: newItem })
+                .then(() => invoke('reorder_collection', { username, ids: updatedCollection.map(i => i.id) }))
+                .catch(console.error);
         } else {
             localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
         }
