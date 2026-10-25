@@ -21,6 +21,8 @@ use scraper::{Html, Selector};
 mod models;
 mod database;
 mod sync;
+mod mcp;
+use mcp::McpState;
 
 const SEARCH_CACHE_TTL_MS: u64 = 2 * 60 * 60 * 1000;
 const SEARCH_CACHE_MAX_ENTRIES: usize = 512;
@@ -1582,6 +1584,89 @@ fn get_peers(sync: State<'_, sync::SyncService>) -> Result<Vec<sync::PeerInfo>, 
     Ok(sync.get_known_peers())
 }
 
+#[derive(Serialize)]
+struct McpStatus {
+    enabled: bool,
+    running: bool,
+    port: u16,
+    username: String,
+    endpoint: String,
+}
+
+#[command]
+fn mcp_get_status(
+    db: State<'_, Arc<Database>>,
+    mcp: State<'_, McpState>,
+) -> Result<McpStatus, String> {
+    let cfg = db.get_mcp_config().unwrap_or_default();
+    let running = mcp.running.load(std::sync::atomic::Ordering::SeqCst);
+    let bound_port = mcp.port.load(std::sync::atomic::Ordering::SeqCst);
+    let port = if running && bound_port > 0 { bound_port } else { cfg.port };
+    Ok(McpStatus {
+        enabled: cfg.enabled,
+        running,
+        port,
+        username: cfg.username,
+        endpoint: format!("http://127.0.0.1:{port}/mcp"),
+    })
+}
+
+#[command]
+fn mcp_set_config(
+    config: crate::models::McpConfig,
+    app: tauri::AppHandle,
+    db: State<'_, Arc<Database>>,
+    mcp: State<'_, McpState>,
+    chat_pending: State<'_, Arc<mcp::McpChatPending>>,
+) -> Result<McpStatus, String> {
+    let port = if config.port == 0 { 8787 } else { config.port };
+    let username = if config.username.trim().is_empty() {
+        "guest".to_string()
+    } else {
+        config.username.trim().to_string()
+    };
+    let config = crate::models::McpConfig {
+        enabled: config.enabled,
+        port,
+        username,
+    };
+    db.set_mcp_config(config.clone())?;
+    // Hot reload: restart or stop the server to match the new config.
+    if config.enabled {
+        mcp.start(&app, db.inner().clone(), &config, chat_pending.inner().clone());
+    } else {
+        mcp.stop();
+    }
+    let running = mcp.running.load(std::sync::atomic::Ordering::SeqCst);
+    Ok(McpStatus {
+        enabled: config.enabled,
+        running,
+        port: config.port,
+        username: config.username,
+        endpoint: format!("http://127.0.0.1:{}/mcp", config.port),
+    })
+}
+
+/// Webview side of the MCP character-chat bridge: resolves one pending
+/// request created by the MCP server's `chat_with_character` tool.
+#[command]
+fn mcp_chat_reply(
+    request_id: String,
+    ok: bool,
+    reply: String,
+    pending: State<'_, Arc<mcp::McpChatPending>>,
+) -> Result<(), String> {
+    let mut map = pending.waiting.lock().map_err(|e| e.to_string())?;
+    match map.remove(&request_id) {
+        Some(tx) => {
+            let payload = if ok { Ok(reply) } else { Err(reply) };
+            let _ = tx.send(payload);
+            Ok(())
+        }
+        None => Err("unknown or expired chat request id".to_string()),
+    }
+}
+
 #[command]
 async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, db: State<'_, Arc<Database>>) -> Result<(), String> {
     let token = db.get_sync_token();
@@ -1633,6 +1718,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let db = Arc::new(Database::new(app.handle()));
             app.manage(db.clone());
@@ -1664,7 +1751,19 @@ pub fn run() {
                 .unwrap_or_else(|_| Client::new());
             
             app.manage(AppState { proxy_client, direct_client, search_cache: RwLock::new(HashMap::new()) });
-            
+
+            // Local MCP server for external AI agents; auto-starts when the
+            // user enabled it in settings (persisted in collection.json).
+            let mcp_state = McpState::default();
+            let chat_pending = Arc::new(mcp::McpChatPending::default());
+            app.manage(chat_pending.clone());
+            if let Some(cfg) = db.get_mcp_config() {
+                if cfg.enabled {
+                    mcp_state.start(app.handle(), db.clone(), &cfg, chat_pending);
+                }
+            }
+            app.manage(mcp_state);
+
             #[cfg(debug_assertions)]
             if let Some(w) = app.get_webview_window("main") {
                 w.open_devtools();
@@ -1706,7 +1805,10 @@ pub fn run() {
             set_sync_token,
             start_sync_server,
             get_peers,
-            sync_with_peer
+            sync_with_peer,
+            mcp_get_status,
+            mcp_set_config,
+            mcp_chat_reply
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

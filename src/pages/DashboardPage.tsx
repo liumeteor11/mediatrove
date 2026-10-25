@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useCollectionStore } from '../store/useCollectionStore';
 import { useThemeStore } from '../store/useThemeStore';
 import { AIConfigPanel } from '../components/AIConfigPanel';
+import { McpPanel } from '../components/McpPanel';
 import { ImportMediaModal } from '../components/ImportMediaModal';
 import { SyncModal } from '../components/SyncModal';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -434,6 +435,11 @@ export const DashboardPage: React.FC = () => {
       {/* AI Configuration Panel */}
       <div className="mb-6">
         <AIConfigPanel />
+      </div>
+
+      {/* MCP Server (external AI agents) */}
+      <div className="mb-6">
+        <McpPanel />
       </div>
 
       <div className="mb-8 transition-all duration-300">
