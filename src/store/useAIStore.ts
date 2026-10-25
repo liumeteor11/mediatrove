@@ -20,7 +20,6 @@ interface AIConfigState {
   apiKeyProvider: AIProvider | '';
   model: string;
   baseUrl: string;
-  temperature: number;
   maxTokens: number;
   systemPrompt: string;
   // Search Configuration
@@ -99,17 +98,7 @@ const decrypt = (ciphertext: string) => {
   }
 };
 
-export const useAIStore = create<AIConfigState>()(
-  persist(
-    (set, get) => ({
-      provider: 'moonshot',
-      apiKey: '', // Stores encrypted key
-      apiKeyProvider: '',
-      model: 'kimi-k3',
-      baseUrl: 'https://api.moonshot.cn/v1',
-      temperature: 0.7,
-      maxTokens: 2000,
-      systemPrompt: `You are a helpful media encyclopedia and curator. 
+export const DEFAULT_SYSTEM_PROMPT = `You are a helpful media encyclopedia and curator.
 When searching or recommending, you must return a VALID JSON array of objects.
 Do not wrap the JSON in markdown code blocks. Just return the raw JSON array.
 Each object must have the following fields:
@@ -123,7 +112,18 @@ Each object must have the following fields:
 - latestUpdateInfo: string (empty if completed)
 - rating: string (e.g. "8.5/10")
 
-Ensure data is accurate.`,
+Ensure data is accurate.`;
+
+export const useAIStore = create<AIConfigState>()(
+  persist(
+    (set, get) => ({
+      provider: 'moonshot',
+      apiKey: '', // Stores encrypted key
+      apiKeyProvider: '',
+      model: 'kimi-k3',
+      baseUrl: 'https://api.moonshot.cn/v1',
+      maxTokens: 2000,
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
       enableSearch: true,
       searchProvider: 'google',
       googleSearchApiKey: '',
@@ -445,7 +445,6 @@ Ensure data is accurate.`,
         apiKeyProvider: state.apiKeyProvider,
         model: state.model,
         baseUrl: state.baseUrl,
-        temperature: state.temperature,
         maxTokens: state.maxTokens,
         systemPrompt: state.systemPrompt,
         enableSearch: state.enableSearch,
@@ -491,7 +490,6 @@ useAIStore.subscribe((state) => {
              apiKey: state.apiKey,
              model: state.model,
              baseUrl: state.baseUrl,
-             temperature: state.temperature,
              maxTokens: state.maxTokens,
              systemPrompt: state.systemPrompt,
              enableSearch: state.enableSearch,

@@ -53,51 +53,6 @@ const normalizeTauriSearchProvider = (sp: any): TauriSearchProvider => {
   return (v === 'google' || v === 'serper' || v === 'yandex') ? (v as any) : 'duckduckgo';
 };
 
-const resolveTauriSearchProvider = (input: {
-  provider: any;
-  googleKey?: string;
-  googleCx?: string;
-  serperKey?: string;
-  yandexKey?: string;
-  yandexUser?: string;
-}): { provider: TauriSearchProvider; apiKey?: string; cx?: string; user?: string } => {
-  const clean = (v?: string): string | undefined => {
-    const s = (v ?? '').trim();
-    if (!s) return undefined;
-    const l = s.toLowerCase();
-    if (l === 'undefined' || l === 'null') return undefined;
-    return s;
-  };
-
-  const requested = normalizeTauriSearchProvider(input.provider);
-  const googleKey = clean(input.googleKey);
-  const googleCx = clean(input.googleCx);
-  const serperKey = clean(input.serperKey);
-  const yandexKey = clean(input.yandexKey);
-  const yandexUser = clean(input.yandexUser);
-
-  const candidates: TauriSearchProvider[] = [requested, 'serper', 'yandex', 'duckduckgo'];
-  const uniq = Array.from(new Set(candidates));
-
-  for (const p of uniq) {
-    if (p === 'google') {
-      if (googleKey && googleCx) return { provider: 'google', apiKey: googleKey, cx: googleCx };
-      continue;
-    }
-    if (p === 'serper') {
-      if (serperKey) return { provider: 'serper', apiKey: serperKey };
-      continue;
-    }
-    if (p === 'yandex') {
-      if (yandexKey && yandexUser) return { provider: 'yandex', apiKey: yandexKey, user: yandexUser };
-      continue;
-    }
-    return { provider: 'duckduckgo' };
-  }
-
-  return { provider: 'duckduckgo' };
-};
-
 const resolveTauriSearchProviderList = (input: {
   provider: any;
   googleKey?: string;
@@ -121,6 +76,9 @@ const resolveTauriSearchProviderList = (input: {
   const yandexKey = clean(input.yandexKey);
   const yandexUser = clean(input.yandexUser);
 
+  // The user's selected engine always goes first; the remaining configured
+  // engines follow as fallbacks (Google before Serper/Yandex), with keyless
+  // DuckDuckGo always last.
   const candidates: TauriSearchProvider[] = [requested, 'google', 'serper', 'yandex', 'duckduckgo'];
   const uniq = Array.from(new Set(candidates));
 
@@ -405,14 +363,10 @@ export const performClientSideSearch = async (
     force: boolean = false,
     preferredType?: MediaType | 'All'
 ): Promise<string> => {
-    const normalizeProvider = (sp: any): string => {
-        const v = String(sp || '').toLowerCase();
-        return (v === 'google' || v === 'serper' || v === 'yandex') ? v : 'duckduckgo';
-    };
-    const { 
-        enableSearch, 
-        searchProvider, 
-        getDecryptedGoogleKey, 
+    const {
+        enableSearch,
+        searchProvider,
+        getDecryptedGoogleKey,
         googleSearchCx,
         getDecryptedSerperKey,
         getDecryptedYandexKey,
@@ -421,16 +375,14 @@ export const performClientSideSearch = async (
 
     if (!enableSearch && !force) return "";
 
-    const searchConfig = {
-        enabled: true,
-        provider: searchProvider,
-        apiKey: searchProvider === 'google' ? getDecryptedGoogleKey() : 
-                searchProvider === 'serper' ? getDecryptedSerperKey() :
-                searchProvider === 'yandex' ? getDecryptedYandexKey() : 
-                undefined,
-        cx: googleSearchCx,
-        user: yandexSearchLogin
-    };
+    // Web mode has no Rust proxy path, so engines are tried directly: the
+    // user's selected engine first, then Google, then Serper, with the keyless
+    // DuckDuckGo block below as the last resort.
+    const googleReady = !!(getDecryptedGoogleKey() || '').trim() && !!(googleSearchCx || '').trim();
+    const serperReady = !!(getDecryptedSerperKey() || '').trim();
+    const serperFirst = searchProvider === 'serper' && serperReady;
+    let triedGoogle = false;
+    let triedSerper = false;
 
     try {
         const isChinese = i18n.language.startsWith('zh');
@@ -827,7 +779,7 @@ export const performClientSideSearch = async (
         }
         
         // Web Mode (Limited)
-        if (searchProvider === 'google') {
+        if (googleReady && (!serperFirst || triedSerper)) {
             const apiKeyStr = getDecryptedGoogleKey();
             if (apiKeyStr && googleSearchCx) {
             const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
@@ -923,14 +875,13 @@ export const performClientSideSearch = async (
                 scoredOut.sort((a, b) => b.score - a.score);
                 const final = scoredOut.slice(0, 8);
                 if (final.length > 0) return JSON.stringify(final);
-                
-                if (!keyFailed) return ""; 
             } // end key loop
             }
+            triedGoogle = true;
         }
 
     // Serper (Web Mode)
-    if (searchProvider === 'serper') {
+    if (serperReady && (serperFirst || triedGoogle || !googleReady)) {
         const apiKeyStr = getDecryptedSerperKey();
         if (apiKeyStr) {
             const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
@@ -1004,8 +955,8 @@ export const performClientSideSearch = async (
                 
                 const out = Array.from(uniq.values()).slice(0, 8);
                 if (out.length > 0) return JSON.stringify(out);
-                if (!keyFailed) return "";
             }
+            triedSerper = true;
         }
     }
 
@@ -1419,6 +1370,17 @@ const MAX_TOKEN_CEILING = 32000;
 const TOOL_CALLING_PROVIDERS: AIProvider[] = ['moonshot', 'deepseek', 'openai', 'qwen', 'google', 'mistral', 'mimo', 'zhipu'];
 
 export const providerSupportsTools = (provider: AIProvider): boolean => TOOL_CALLING_PROVIDERS.includes(provider);
+
+// True when the model can search the web itself via its provider's native
+// search tool — the same condition callAI uses to activate it. Callers use
+// this to skip pre-gathering context from the search-engine APIs, so native
+// search is preferred and the engines stay a fallback.
+export const canUseNativeSearch = (forceSearch: boolean = false): boolean => {
+    const s = useAIStore.getState();
+    if (!(s.enableSearch || forceSearch) || !s.enableNetworking) return false;
+    if (!providerSupportsTools(s.provider)) return false;
+    return getModelCapabilities(s.provider, s.model).nativeSearch;
+};
 
 export const callAI = async (messages: any[], temperature: number = 0.7, options: { forceSearch?: boolean; disableSearch?: boolean; maxTokens?: number | 'auto'; configOverride?: { baseURL?: string; apiKey?: string; model?: string; provider?: AIProvider } } = {}): Promise<string> => {
     const state = useAIStore.getState();
@@ -2381,7 +2343,9 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   const shouldUseAI = !hasExactBaseMatch && !(baseScores.filter(s => s >= 90).length >= 4);
 
   let searchContext = "";
-  const useSearchContext = shouldUseAI && baseUnique.size < 4;
+  // The AI call below forces search, so when the model can search natively the
+  // engine-API context is redundant — let the model's built-in search do it.
+  const useSearchContext = shouldUseAI && baseUnique.size < 4 && !canUseNativeSearch(true);
   if (useSearchContext) {
       searchContext = await timed(
         '网页搜索上下文',
@@ -2748,6 +2712,14 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
 
     if (!enableSearch) return "";
 
+    // Web mode: the user's selected engine first, then Google, then Serper,
+    // with the keyless DuckDuckGo block as the last resort.
+    const googleReady = !!(getDecryptedGoogleKey() || '').trim() && !!(googleSearchCx || '').trim();
+    const serperReady = !!(getDecryptedSerperKey() || '').trim();
+    const serperFirst = searchProvider === 'serper' && serperReady;
+    let triedGoogle = false;
+    let triedSerper = false;
+
     try {
         if (isTauriEnv) {
             // Tauri Mode
@@ -2781,7 +2753,7 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
             }
         } else {
             // Web Mode
-            if (searchProvider === 'google') {
+            if (googleReady && (!serperFirst || triedSerper)) {
                 const apiKeyStr = getDecryptedGoogleKey();
                 if (apiKeyStr && googleSearchCx) {
                     const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
@@ -2808,7 +2780,9 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
                         }
                     }
                 }
-            } else if (searchProvider === 'serper') {
+                triedGoogle = true;
+            }
+            if (serperReady && (serperFirst || triedGoogle || !googleReady)) {
                  const apiKeyStr = getDecryptedSerperKey();
                  if (apiKeyStr) {
                     const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
@@ -2829,17 +2803,18 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
                         } catch {}
                     }
                  }
-            } else if (searchProvider === 'duckduckgo') {
-                try {
-                     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`;
-                     const res = await fetchWithTimeout(url, { timeoutMs: 5000 });
-                     if (res.ok) {
-                         const data = await res.json();
-                         const items = [...(data.Results || []), ...(data.RelatedTopics || [])];
-                         return items.slice(0, 3).map((i: any) => i.Text || i.FirstURL).join('\n');
-                     }
-                } catch {}
+                triedSerper = true;
             }
+            // DuckDuckGo: keyless, so it always runs as the final fallback.
+            try {
+                 const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`;
+                 const res = await fetchWithTimeout(url, { timeoutMs: 5000 });
+                 if (res.ok) {
+                     const data = await res.json();
+                     const items = [...(data.Results || []), ...(data.RelatedTopics || [])];
+                     return items.slice(0, 3).map((i: any) => i.Text || i.FirstURL).join('\n');
+                 }
+            } catch {}
         }
     } catch (e) {
         console.warn("getSearchSnippets failed", e);
@@ -2940,8 +2915,12 @@ export const checkUpdates = async (items: MediaItem[]): Promise<{ id: string; la
       
       let context = "";
       let queryList = "";
-      
-      if (enableSearch) {
+
+      // Native-search models fetch their own fresh results; only fall back to
+      // engine-API snippets when the model cannot search on its own.
+      const useEngineContext = enableSearch && !canUseNativeSearch();
+
+      if (useEngineContext) {
           // Parallel search for the batch
           const searchPromises = pendingForAI.map(async (item) => {
               const typeTerm = isChinese ? 
@@ -2972,8 +2951,8 @@ export const checkUpdates = async (items: MediaItem[]): Promise<{ id: string; la
       const today = new Date().toISOString().split('T')[0];
       if (isChinese) {
           userPrompt = `今天是 ${today}。请以此日期为基准检查作品的最新更新状态: ${queryList}。
-          
-          ${enableSearch ? `参考搜索结果:\n${context}\n` : ''}
+
+          ${useEngineContext ? `参考搜索结果:\n${context}\n` : ''}
           
           请提供截至今天的最新一集/一章信息。
           返回一个包含以下对象的JSON数组:
@@ -2990,8 +2969,8 @@ export const checkUpdates = async (items: MediaItem[]): Promise<{ id: string; la
           `;
       } else {
           userPrompt = `Today is ${today}. Check the latest status as of this date for: ${queryList}.
-          
-          ${enableSearch ? `Reference Search Results:\n${context}\n` : ''}
+
+          ${useEngineContext ? `Reference Search Results:\n${context}\n` : ''}
           
           Provide the absolute latest episode/chapter as of today.
           Return a JSON array with objects containing:

@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useAIStore, AIProvider, SearchProvider } from '../store/useAIStore';
+import { useAIStore, AIProvider, SearchProvider, DEFAULT_SYSTEM_PROMPT } from '../store/useAIStore';
 import { callAI, testSearchConnection, testOmdbConnection } from '../services/aiService';
 import { testTmdbConnection } from '../services/tmdbService';
 import { testBangumiConnection } from '../services/bangumiService';
-import { Activity, CheckCircle, AlertCircle, Eye, EyeOff, Info, List, Globe, Search, Plug } from 'lucide-react';
+import { Activity, CheckCircle, AlertCircle, Eye, EyeOff, Info, List, Globe, Search, Plug, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { toast } from 'react-toastify';
@@ -13,7 +13,6 @@ import { MODEL_CATALOG, REASONING_LEVELS, getModelCapabilities, type ReasoningLe
 
 export const AIConfigPanel: React.FC = () => {
   const { t } = useTranslation();
-  
   const PROVIDER_OPTIONS: { value: AIProvider; label: string }[] = [
     { value: 'openai', label: t('ai_config.provider_openai') },
     { value: 'moonshot', label: t('ai_config.provider_moonshot') },
@@ -33,8 +32,8 @@ export const AIConfigPanel: React.FC = () => {
     { value: 'duckduckgo', label: t('ai_config.search_provider_duckduckgo') },
   ];
 
-  const { 
-    provider, apiKey, apiKeyProvider, model, baseUrl, temperature, maxTokens, systemPrompt,
+  const {
+    provider, apiKey, apiKeyProvider, model, baseUrl, maxTokens, systemPrompt,
     enableSearch, searchProvider, googleSearchCx, yandexSearchLogin,
     omdbApiKey, tmdbApiKey, bangumiToken, enableTmdb, enableBangumi,
     enableNetworking, reasoningEffort, enableTrending,
@@ -54,7 +53,6 @@ export const AIConfigPanel: React.FC = () => {
   const [localOmdbKey, setLocalOmdbKey] = useState(getDecryptedOmdbKey());
   const [localTmdbKey, setLocalTmdbKey] = useState(getDecryptedTmdbKey());
   const [localBangumiToken, setLocalBangumiToken] = useState(getDecryptedBangumiToken());
-  
   const [showKey, setShowKey] = useState(false);
   const [showGoogleKey, setShowGoogleKey] = useState(false);
   const [showSerperKey, setShowSerperKey] = useState(false);
@@ -82,12 +80,12 @@ export const AIConfigPanel: React.FC = () => {
   const [isTmdbTesting, setIsTmdbTesting] = useState(false);
   const [isBangumiTesting, setIsBangumiTesting] = useState(false);
   const [isPluginManagerOpen, setIsPluginManagerOpen] = useState(false);
+  const [showSystemPrompt, setShowSystemPrompt] = useState(false);
 
   const handleTestSearch = async () => {
     if (searchProvider === 'google' && !localGoogleKey) return toast.error(t('ai_config.api_key_required'));
     if (searchProvider === 'serper' && !localSerperKey) return toast.error(t('ai_config.api_key_required'));
   if (searchProvider === 'yandex' && (!localYandexKey || !yandexSearchLogin)) return toast.error(t('ai_config.api_key_required'));
-    
     setIsSearchTesting(true);
     try {
       const config = {
@@ -236,13 +234,11 @@ export const AIConfigPanel: React.FC = () => {
             message: 'Connection successful'
         });
         toast.success(t('ai_config.connection_verified'));
-        
         // Auto-save on success
         setConfig({
           apiKey: localKey,
           model,
           baseUrl,
-          temperature,
           maxTokens,
           enableSearch,
           searchProvider,
@@ -289,6 +285,13 @@ export const AIConfigPanel: React.FC = () => {
       <div className="flex items-center gap-2 mb-4 border-b border-theme-border pb-3">
         <Activity className="w-6 h-6 text-theme-accent" />
         <h2 className="text-xl font-bold text-theme-text">{t('ai_config.title')}</h2>
+        <button
+          onClick={() => setIsPluginManagerOpen(true)}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-theme-border bg-theme-bg text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors"
+        >
+          <Plug className="w-3.5 h-3.5" />
+          {t('plugin_manager.title')}
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -441,26 +444,6 @@ export const AIConfigPanel: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-theme-text mb-1">
-              {t('ai_config.temperature')} ({temperature})
-            </label>
-            <input 
-              type="range" 
-              min="0" 
-              max="1" 
-              step="0.1" 
-              value={temperature}
-              onChange={(e) => setConfig({ temperature: parseFloat(e.target.value) })}
-              className="w-full h-2 bg-theme-border rounded-lg appearance-none cursor-pointer"
-            />
-            <div className="flex justify-between text-xs text-theme-subtext mt-1">
-              <span>{t('ai_config.temp_precise')}</span>
-              <span>{t('ai_config.temp_balanced')}</span>
-              <span>{t('ai_config.temp_creative')}</span>
-            </div>
-          </div>
-
-          <div>
             <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.max_tokens')}</label>
             <input 
               type="number" 
@@ -488,7 +471,6 @@ export const AIConfigPanel: React.FC = () => {
                 <p className="text-xs text-theme-subtext/70">
                     {modelCaps.nativeSearch ? t('ai_config.native_search_supported') : t('ai_config.native_search_unsupported')}
                 </p>
-                
                  <div className="flex items-center justify-between">
                     <span className="text-sm text-theme-text">{t('ai_config.reasoning_effort')}</span>
                     <select 
@@ -722,9 +704,7 @@ export const AIConfigPanel: React.FC = () => {
                     </div>
                 )}
 
-                
 
-                
 
             </div>
           )}
@@ -975,8 +955,38 @@ export const AIConfigPanel: React.FC = () => {
         </div>
       </div>
 
-
-      
+      {/* Advanced: System Prompt (collapsed by default) */}
+      <div className="mt-4 border-t border-theme-border pt-4">
+        <button
+          type="button"
+          onClick={() => setShowSystemPrompt(!showSystemPrompt)}
+          className="w-full flex items-center gap-2 text-left text-sm font-semibold text-theme-text hover:text-theme-accent transition-colors"
+        >
+          {showSystemPrompt ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          {t('ai_config.system_prompt_label')}
+        </button>
+        {showSystemPrompt && (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-theme-subtext/70">{t('ai_config.system_prompt_hint')}</p>
+            <textarea
+              value={systemPrompt}
+              onChange={(e) => setConfig({ systemPrompt: e.target.value })}
+              rows={10}
+              spellCheck={false}
+              className="w-full px-4 py-3 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none font-mono text-xs leading-relaxed resize-y"
+            />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setConfig({ systemPrompt: DEFAULT_SYSTEM_PROMPT })}
+                className="text-xs px-3 py-1.5 rounded border border-theme-border bg-theme-surface text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors"
+              >
+                {t('ai_config.system_prompt_reset')}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {isProxyHelpOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">

@@ -22,7 +22,11 @@ export interface TMDBMedia {
 export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' = 'multi'): Promise<TMDBMedia[]> => {
   const s = useAIStore.getState();
   const key = s.getDecryptedTmdbKey && s.getDecryptedTmdbKey();
-  
+
+  // The settings toggle must fully disable TMDB, not just cover fetching —
+  // otherwise switching it off still sends searches to TMDB.
+  if (!s.enableTmdb) return [];
+
   if (!key) {
     console.warn("TMDB API Key is missing");
     return [];
@@ -43,7 +47,7 @@ export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' =
 export const getTMDBDetails = async (id: number, type: 'movie' | 'tv', language: string = 'zh-CN'): Promise<any> => {
     const s = useAIStore.getState();
     const key = s.getDecryptedTmdbKey && s.getDecryptedTmdbKey();
-    if (!key) return null
+    if (!s.enableTmdb || !key) return null
 
     try {
         const cacheKey = `tmdb_details_v1_${type}_${id}_${language}`;

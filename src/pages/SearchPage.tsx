@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw } from 'lucide-react';
-import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl } from '../services/aiService';
+import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch } from '../services/aiService';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
 import { MediaCard } from '../components/MediaCard';
 import { useCollectionStore } from '../store/useCollectionStore';
@@ -297,6 +297,9 @@ export const SearchPage: React.FC = () => {
   };
 
   const verifyResults = async (items: MediaItem[], q: string, opId: string): Promise<MediaItem[] | undefined> => {
+    // searchMedia's AI call runs with forced search: when the model can search
+    // natively, the engine-API verification pass is redundant.
+    if (canUseNativeSearch(true)) return undefined;
     try {
       const ctx = await performClientSideSearch(q, true, selectedTypeRef.current);
       if (!ctx) return undefined;
