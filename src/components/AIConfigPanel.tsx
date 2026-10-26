@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useAIStore, AIProvider, SearchProvider, DEFAULT_SYSTEM_PROMPT } from '../store/useAIStore';
-import { callAI, testSearchConnection, testOmdbConnection } from '../services/aiService';
+import { useAIStore, AIProvider, SearchProvider, DEFAULT_SYSTEM_PROMPT, TrendingMode } from '../store/useAIStore';
+import { callAI, testSearchConnection, testOmdbConnection, clearTrendingHistory, getTrendingHistory } from '../services/aiService';
 import { testTmdbConnection } from '../services/tmdbService';
 import { testBangumiConnection } from '../services/bangumiService';
-import { Activity, CheckCircle, AlertCircle, Eye, EyeOff, Info, List, Globe, Search, Plug, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, CheckCircle, AlertCircle, Eye, EyeOff, Info, List, Globe, Search, Plug, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { toast } from 'react-toastify';
@@ -36,7 +36,7 @@ export const AIConfigPanel: React.FC = () => {
     provider, apiKey, apiKeyProvider, model, baseUrl, maxTokens, systemPrompt,
     enableSearch, searchProvider, googleSearchCx, yandexSearchLogin,
     omdbApiKey, tmdbApiKey, bangumiToken, enableTmdb, enableBangumi,
-    enableNetworking, reasoningEffort, enableTrending,
+    enableNetworking, reasoningEffort, enableTrending, trendingMode, trendingPrompt,
     useSystemProxy, proxyProtocol, proxyHost, proxyPort, proxyUsername,
     setProvider, setConfig, getDecryptedApiKey, getDecryptedGoogleKey, getDecryptedSerperKey, getDecryptedYandexKey, getDecryptedOmdbKey, getDecryptedTmdbKey, getDecryptedBangumiToken, getProxyUrl
   } = useAIStore();
@@ -53,6 +53,11 @@ export const AIConfigPanel: React.FC = () => {
   const [localOmdbKey, setLocalOmdbKey] = useState(getDecryptedOmdbKey());
   const [localTmdbKey, setLocalTmdbKey] = useState(getDecryptedTmdbKey());
   const [localBangumiToken, setLocalBangumiToken] = useState(getDecryptedBangumiToken());
+  // Trending recommendation config: draft for the custom prompt + size of the
+  // "already recommended" history used to keep every round different.
+  const [trendingPromptDraft, setTrendingPromptDraft] = useState(trendingPrompt || '');
+  const [trendingHistoryCount, setTrendingHistoryCount] = useState(() => getTrendingHistory().length);
+  useEffect(() => { setTrendingPromptDraft(trendingPrompt || ''); }, [trendingPrompt]);
   const [showKey, setShowKey] = useState(false);
   const [showGoogleKey, setShowGoogleKey] = useState(false);
   const [showSerperKey, setShowSerperKey] = useState(false);
@@ -487,15 +492,86 @@ export const AIConfigPanel: React.FC = () => {
                 <div className="flex items-center justify-between">
                     <span className="text-sm text-theme-text">{t('ai_config.enable_trending')}</span>
                     <label className="relative inline-flex items-center cursor-pointer">
-                        <input 
-                            type="checkbox" 
-                            checked={enableTrending} 
-                            onChange={(e) => setConfig({ enableTrending: e.target.checked })} 
-                            className="sr-only peer" 
+                        <input
+                            type="checkbox"
+                            checked={enableTrending}
+                            onChange={(e) => setConfig({ enableTrending: e.target.checked })}
+                            className="sr-only peer"
                         />
                         <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                 </div>
+
+                {enableTrending && (
+                    <div className="mt-1 p-3 rounded-lg bg-theme-bg/50 border border-theme-border space-y-3">
+                        <div>
+                            <label className="block text-sm font-medium text-theme-text mb-1.5">{t('ai_config.trending_mode')}</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                {(['recent', 'preference', 'custom'] as const).map((m) => (
+                                    <button
+                                        key={m}
+                                        type="button"
+                                        onClick={() => setConfig({ trendingMode: m as TrendingMode })}
+                                        className={clsx(
+                                            'px-2 py-1.5 text-xs font-medium rounded-md border-2 transition-colors',
+                                            (trendingMode || 'recent') === m
+                                                ? 'bg-theme-accent text-theme-bg border-theme-accent'
+                                                : 'bg-theme-surface text-theme-subtext border-theme-border hover:text-theme-text hover:border-theme-accent/50'
+                                        )}
+                                    >
+                                        {t(`ai_config.trending_mode_${m}`)}
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="mt-1.5 text-xs text-theme-subtext">
+                                {t(`ai_config.trending_mode_${trendingMode || 'recent'}_desc`)}
+                            </p>
+                        </div>
+
+                        {(trendingMode || 'recent') === 'custom' && (
+                            <div>
+                                <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.trending_custom_prompt_label')}</label>
+                                <textarea
+                                    value={trendingPromptDraft}
+                                    onChange={(e) => setTrendingPromptDraft(e.target.value)}
+                                    placeholder={t('ai_config.trending_custom_prompt_placeholder')}
+                                    className="w-full h-28 p-2 rounded-lg bg-theme-bg border border-theme-border text-theme-text text-xs font-mono focus:ring-1 focus:ring-theme-accent focus:border-transparent resize-none"
+                                />
+                                <div className="flex justify-end mt-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setConfig({ trendingPrompt: trendingPromptDraft });
+                                            toast.success(t('common.save_success', { defaultValue: 'Saved' }));
+                                        }}
+                                        className="px-3 py-1 text-xs rounded-md border-2 border-theme-accent bg-theme-accent text-theme-bg hover:bg-theme-accent-hover transition-colors"
+                                    >
+                                        {t('search_page.save_prompt')}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="flex items-center justify-between">
+                            <span className="text-xs text-theme-subtext">
+                                {t('ai_config.trending_history_desc', { count: trendingHistoryCount })}
+                            </span>
+                            <button
+                                type="button"
+                                disabled={trendingHistoryCount === 0}
+                                onClick={() => {
+                                    clearTrendingHistory();
+                                    setTrendingHistoryCount(0);
+                                    toast.success(t('ai_config.trending_history_cleared'));
+                                }}
+                                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md border border-theme-border bg-theme-surface text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                <Trash2 className="w-3 h-3" />
+                                {t('ai_config.trending_clear_history')}
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
           </div>
 

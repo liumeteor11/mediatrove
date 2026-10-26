@@ -13,6 +13,12 @@ const SECRET_KEY = import.meta.env.VITE_SECRET_KEY || 'media-tracker-ai-config-s
 export type AIProvider = 'moonshot' | 'openai' | 'deepseek' | 'qwen' | 'google' | 'mistral' | 'mimo' | 'zhipu' | 'custom';
 export type SearchProvider = 'google' | 'serper' | 'yandex' | 'duckduckgo';
 
+// Trending recommendation modes for the search landing page:
+// - 'recent':     time-based preset — hottest / highest-rated works of the last 3 months
+// - 'preference': analyze the user's collection to infer taste, recommend related works
+// - 'custom':     user-authored prompt (trendingPrompt)
+export type TrendingMode = 'recent' | 'preference' | 'custom';
+
 interface AIConfigState {
   provider: AIProvider;
   apiKey: string;
@@ -38,6 +44,7 @@ interface AIConfigState {
   enableNetworking: boolean;
   reasoningEffort: ReasoningLevel;
   enableTrending: boolean;
+  trendingMode: TrendingMode;
   trendingPrompt: string;
   lastSearchDurationMs: number | null;
   lastSearchAt: string | null;
@@ -139,6 +146,7 @@ export const useAIStore = create<AIConfigState>()(
       enableNetworking: true,
       reasoningEffort: 'auto',
       enableTrending: true,
+      trendingMode: 'recent',
       trendingPrompt: '',
       lastSearchDurationMs: null,
       lastSearchAt: null,
@@ -462,6 +470,7 @@ export const useAIStore = create<AIConfigState>()(
         enableNetworking: state.enableNetworking,
         reasoningEffort: state.reasoningEffort,
         enableTrending: state.enableTrending,
+        trendingMode: state.trendingMode,
         trendingPrompt: state.trendingPrompt,
         lastSearchDurationMs: state.lastSearchDurationMs,
         lastSearchAt: state.lastSearchAt,
@@ -507,6 +516,7 @@ useAIStore.subscribe((state) => {
              enableNetworking: state.enableNetworking,
              reasoningEffort: state.reasoningEffort,
              enableTrending: state.enableTrending,
+             trendingMode: state.trendingMode,
              trendingPrompt: state.trendingPrompt,
              useSystemProxy: state.useSystemProxy,
              proxyProtocol: state.proxyProtocol,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw } from 'lucide-react';
-import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch } from '../services/aiService';
+import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
 import { MediaCard } from '../components/MediaCard';
 import { useCollectionStore } from '../store/useCollectionStore';
@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 export const SearchPage: React.FC = () => {
   const { t, i18n } = useTranslation();
-  const { trendingPrompt, setConfig, enableTrending } = useAIStore();
+  const { trendingPrompt, trendingMode, setConfig, enableTrending } = useAIStore();
   
   // Use global search store
   const { 
@@ -132,12 +132,6 @@ export const SearchPage: React.FC = () => {
         setResults([]);
     }
   }, [enableTrending]);
-
-  const getTrendingPromptKey = () => {
-    const langKey = i18n.language.split('-')[0];
-    const promptKey = (trendingPrompt || '').trim();
-    return `${langKey}::${promptKey}`;
-  };
 
   const loadTrending = async (forceRefresh = false, opts: { silent?: boolean } = {}) => {
     const opId = startOp();
@@ -498,9 +492,9 @@ export const SearchPage: React.FC = () => {
 
   const savePrompt = async () => {
       let finalPrompt = tempPrompt;
-      
+
       // Removed translation logic as requested
-      setConfig({ trendingPrompt: finalPrompt });
+      setConfig({ trendingPrompt: finalPrompt, trendingMode: 'custom' });
       setIsPromptModalOpen(false);
       toast.success(t('common.save_success', { defaultValue: "Saved" }));
       // Reload trending with new prompt
@@ -613,6 +607,9 @@ export const SearchPage: React.FC = () => {
                     <div className="flex items-center gap-2 font-bold text-xl text-theme-accent">
                         <TrendingUp className="w-6 h-6" />
                         <h2>{t('search_page.trending_title')}</h2>
+                        <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-theme-accent/10 text-theme-accent border border-theme-accent/30">
+                            {t(`ai_config.trending_mode_${trendingMode || 'recent'}`)}
+                        </span>
                     </div>
                     
                     <div className="flex items-center gap-2">

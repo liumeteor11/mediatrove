@@ -6,8 +6,9 @@ import OpenAI from "openai";
 import { MediaType, MediaItem, SearchDiagnostics } from "../types/types";
 import { v4 as uuidv4 } from 'uuid';
 import { useAIStore } from "../store/useAIStore";
+import { useCollectionStore } from "../store/useCollectionStore";
 import i18n from '../i18n';
-import type { AIProvider } from '../store/useAIStore';
+import type { AIProvider, TrendingMode } from '../store/useAIStore';
 import { buildRequestExtras, getModelCapabilities, getNativeSearchTools } from './modelCatalog';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from 'react-toastify';
@@ -1268,10 +1269,7 @@ export const refreshTrendingCache = async (): Promise<void> => {
                 localStorage.setItem('media_tracker_trending_data', JSON.stringify(trending));
                 localStorage.setItem('media_tracker_trending_ts', Date.now().toString());
                 try {
-                    const s = useAIStore.getState();
-                    const langKey = i18n.language.split('-')[0];
-                    const promptKey = (s.trendingPrompt || '').trim();
-                    localStorage.setItem('media_tracker_trending_prompt_key', `${langKey}::${promptKey}`);
+                    localStorage.setItem('media_tracker_trending_prompt_key', getTrendingPromptKey());
                 } catch (e) { console.warn("Prompt key save failed", e); }
             } catch (e) { console.warn("Trending cache save failed", e); }
             useAIStore.getState().setTrendingCache(trending as any[]);
@@ -3710,19 +3708,114 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
                     }
                 }
             } else {
-                const api = langZh ? 'https://zh.wikipedia.org/w/api.php' : 'https://en.wikipedia.org/w/api.php';
-                const res = await fetchWithTimeout(`${api}?action=query&prop=pageimages&piprop=thumbnail|original&pithumbsize=1024&format=json&origin=*&titles=${encodeURIComponent(title)}`, { timeoutMs: 8000 });
-                if (res.ok) {
+                // pageimages only surfaces freely-licensed (Commons) pictures,
+                // while nearly all movie/series posters are non-free local
+                // uploads — so also scan the article's file list for a
+                // poster-ish file and resolve its real URL via imageinfo.
+                // Chinese articles often carry no files at all; bridge through
+                // Wikidata sitelinks to the English article, which almost
+                // always embeds a theatrical poster.
+                const wikiApiOf = (lang: 'zh' | 'en') => `https://${lang}.wikipedia.org/w/api.php`;
+
+                const wikiPageImage = async (api: string, pageTitle: string): Promise<string | undefined> => {
+                    const res = await fetchWithTimeout(`${api}?action=query&prop=pageimages&piprop=thumbnail|original&pithumbsize=1024&format=json&origin=*&titles=${encodeURIComponent(pageTitle)}`, { timeoutMs: 8000 });
+                    if (!res.ok) return undefined;
                     const data = await res.json();
-                    if (data?.query?.pages) {
-                        const pages = Object.values(data.query.pages);
-                        if (pages.length > 0) {
-                            const p: any = pages[0];
-                            const img = p?.thumbnail?.source || p?.original?.source;
-                            if (typeof img === 'string' && img.length > 0) return { picked: img, candidates: [img] };
+                    const pages = Object.values(data?.query?.pages || {});
+                    const p: any = pages[0];
+                    if (p && !p.missing) {
+                        const img = p?.thumbnail?.source || p?.original?.source;
+                        if (typeof img === 'string' && img.length > 0) return img;
+                    }
+                    return undefined;
+                };
+
+                // Returns { picked, canonical } — canonical is the redirected
+                // article title, needed to look the item up on Wikidata.
+                const wikiArticlePoster = async (api: string, pageTitle: string): Promise<{ picked?: string; canonical?: string } | undefined> => {
+                    const listRes = await fetchWithTimeout(`${api}?action=query&prop=images&imlimit=80&redirects=1&format=json&origin=*&titles=${encodeURIComponent(pageTitle)}`, { timeoutMs: 8000 });
+                    if (!listRes.ok) return undefined;
+                    const listData = await listRes.json();
+                    const pages = Object.values(listData?.query?.pages || {});
+                    const canonical = (pages[0] as any)?.title || pageTitle;
+                    const files: string[] = [];
+                    for (const pg of pages as any[]) {
+                        for (const im of (pg?.images || [])) {
+                            const t = im?.title;
+                            if (typeof t === 'string' && /^File:.+\.(jpe?g|png|webp)$/i.test(t)) files.push(t);
                         }
                     }
-                }
+                    // Poster-like names first; drop logos, icons and other
+                    // non-poster artwork that commonly lives on film articles.
+                    // Word boundaries matter: bare "ost" would also kill every
+                    // "pOSTer" filename.
+                    const bad = /\b(logo|logos|icon|icons|flag|flags|map|maps|signature|soundtrack|ost|banner|wordmark|screenshot|diagram|chart|locator)s?\b/i;
+                    const good = /poster|海报|封面|cover|teaser|promo|official still|key art/i;
+                    const candidates = files.filter((f) => !bad.test(f) && good.test(f));
+                    if (candidates.length > 0) {
+                        const infoRes = await fetchWithTimeout(`${api}?action=query&prop=imageinfo&iiprop=url&format=json&origin=*&titles=${encodeURIComponent(candidates.slice(0, 20).join('|'))}`, { timeoutMs: 8000 });
+                        if (infoRes.ok) {
+                            const infoData = await infoRes.json();
+                            const infoPages = Object.values(infoData?.query?.pages || {});
+                            const urls: string[] = [];
+                            for (const pg of infoPages as any[]) {
+                                const u = pg?.imageinfo?.[0]?.url;
+                                if (typeof u === 'string' && u.length > 0) urls.push(u);
+                            }
+                            for (const u of urls) {
+                                if (await checkImage(u)) return { picked: u, canonical };
+                            }
+                        }
+                    }
+                    return { canonical };
+                };
+
+                const wikidataCrossLangTitle = async (site: 'zhwiki' | 'enwiki', pageTitle: string): Promise<string | undefined> => {
+                    try {
+                        const res = await fetchWithTimeout(`https://www.wikidata.org/w/api.php?action=wbgetentities&sites=${site}&titles=${encodeURIComponent(pageTitle)}&props=sitelinks&format=json&origin=*&normalize=1`, { timeoutMs: 8000 });
+                        if (!res.ok) return undefined;
+                        const data = await res.json();
+                        const entities = data?.entities || {};
+                        const other: 'enwiki' | 'zhwiki' = site === 'zhwiki' ? 'enwiki' : 'zhwiki';
+                        const self: 'zhwiki' | 'enwiki' = site;
+                        for (const ent of Object.values(entities) as any[]) {
+                            const sl = ent?.sitelinks || {};
+                            // Only trust the mapping when the item really links
+                            // back to the requested page (guards name drift).
+                            if (sl[self]?.title && sl[other]?.title) return sl[other].title;
+                        }
+                    } catch {}
+                    return undefined;
+                };
+
+                const tryWiki = async (site: 'zh' | 'en', pageTitle: string): Promise<string | undefined> => {
+                    const api = wikiApiOf(site);
+                    const res = await wikiArticlePoster(api, pageTitle);
+                    if (res?.picked) return res.picked;
+                    const canonical = res?.canonical || pageTitle;
+                    const viaPage = await wikiPageImage(api, canonical);
+                    if (viaPage) return viaPage;
+                    // Bridge to the other language via Wikidata sitelinks.
+                    const crossTitle = await wikidataCrossLangTitle(site === 'zh' ? 'zhwiki' : 'enwiki', canonical);
+                    if (crossTitle) {
+                        const otherSite: 'zh' | 'en' = site === 'zh' ? 'en' : 'zh';
+                        const crossRes = await wikiArticlePoster(wikiApiOf(otherSite), crossTitle);
+                        if (crossRes?.picked) return crossRes.picked;
+                        return await wikiPageImage(wikiApiOf(otherSite), crossTitle);
+                    }
+                    return undefined;
+                };
+
+                const primary: 'zh' | 'en' = langZh ? 'zh' : 'en';
+                const secondary: 'zh' | 'en' = langZh ? 'en' : 'zh';
+                try {
+                    const picked = (await tryWiki(primary, title)) || (await tryWiki(secondary, title));
+                    if (picked) {
+                        setPreferredPoster(cacheKey, picked);
+                        updatePosterCandidates(cacheKey, [picked], picked);
+                        return { picked, candidates: [picked] };
+                    }
+                } catch {}
             }
         } catch {}
 
@@ -4008,20 +4101,78 @@ const createFallbackItemsFromContext = async (searchContext: string, limit: numb
     }
 };
 
+// ---- Trending recommendation helpers -------------------------------------
+// Every recommendation round must surface different works: previously
+// recommended titles are remembered here and injected into the prompt's
+// exclude list on the next round.
+const TRENDING_HISTORY_KEY = 'media_tracker_trending_history';
+const TRENDING_HISTORY_CAP = 60;
+
+const normalizeTitleKey = (t: string) => String(t || '').trim().toLowerCase();
+
+export const getTrendingHistory = (): string[] => {
+    try {
+        const raw = localStorage.getItem(TRENDING_HISTORY_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+    } catch {
+        return [];
+    }
+};
+
+export const appendTrendingHistory = (titles: string[]): void => {
+    try {
+        const existing = getTrendingHistory();
+        const seen = new Set(existing.map(normalizeTitleKey));
+        const merged = [...existing];
+        for (const t of titles) {
+            const k = normalizeTitleKey(t);
+            if (!k || seen.has(k)) continue;
+            seen.add(k);
+            merged.push(t);
+        }
+        localStorage.setItem(TRENDING_HISTORY_KEY, JSON.stringify(merged.slice(-TRENDING_HISTORY_CAP)));
+    } catch {}
+};
+
+export const clearTrendingHistory = (): void => {
+    try { localStorage.removeItem(TRENDING_HISTORY_KEY); } catch {}
+};
+
+// Centralized cache key: switching language, mode or the custom prompt (and,
+// in preference mode, a changed collection) invalidates the 7-day cache.
+export const getTrendingPromptKey = (): string => {
+    const s = useAIStore.getState();
+    const langKey = i18n.language.split('-')[0];
+    const mode: TrendingMode = s.trendingMode || 'recent';
+    const parts: string[] = [langKey, mode];
+    if (mode === 'custom') parts.push((s.trendingPrompt || '').trim());
+    if (mode === 'preference') {
+        const titles = useCollectionStore
+            .getState()
+            .collection.map((i) => normalizeTitleKey(i.title || ''))
+            .filter(Boolean)
+            .sort();
+        parts.push(String(titles.length), titles.join('|').slice(0, 500));
+    }
+    return parts.join('::');
+};
+
 export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<MediaItem[]> => {
-  const { systemPrompt, trendingPrompt, provider } = useAIStore.getState();
+  const { systemPrompt, trendingPrompt, provider, trendingMode } = useAIStore.getState();
+  const mode: TrendingMode = trendingMode || 'recent';
   const dateObj = new Date();
   const today = dateObj.toISOString().split('T')[0];
   const currentYear = dateObj.getFullYear();
   const currentMonth = dateObj.getMonth() + 1;
   const monthStr = `${currentYear}年${currentMonth}月`;
-  
+
   const isChinese = i18n.language.startsWith('zh');
 
   // Reliability: the prompts below demand a web_search tool call. When the
   // provider has no tool support (e.g. custom/OpenAI-compatible endpoints) or
   // search is disabled, instruct the model to fall back to its own knowledge
-  // instead of fabricating "trending" data.
+  // instead of fabricating “trending” data.
   const { enableSearch: trendingEnableSearch, enableNetworking: trendingEnableNetworking } = useAIStore.getState();
   const toolCallingProviders: AIProvider[] = ['moonshot', 'deepseek', 'openai', 'qwen', 'google', 'mistral', 'mimo', 'zhipu'];
   const webSearchAvailable = trendingEnableSearch && trendingEnableNetworking && toolCallingProviders.includes(provider as AIProvider);
@@ -4032,72 +4183,136 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
   // We no longer perform a manual pre-search. We let the AI decide what to search based on the prompt.
   const searchContext = "";
 
-  // Prepare exclusion list
-  const excludeTitles = excludeItems.map(i => i.title).filter(Boolean);
-  const excludeStr = excludeTitles.length > 0 
-      ? (isChinese ? `\n\n[排除列表] 请不要推荐以下已展示过的作品：${excludeTitles.join(', ')}。请推荐其他不同的热门作品。` 
-                   : `\n\n[Exclude List] Do NOT recommend the following items that were already shown: ${excludeTitles.join(', ')}. Please recommend DIFFERENT trending works.`)
+  // Exclusion list: what is on screen right now + everything recommended in
+  // previous rounds + (in preference mode) the user's own collection. This is
+  // what guarantees each round recommends different works.
+  const history = getTrendingHistory();
+  const collectionTitles = mode === 'preference'
+      ? useCollectionStore.getState().collection.map((i) => i.title || '').filter(Boolean)
+      : [];
+  const excludeSet = new Set<string>();
+  for (const t of [...excludeItems.map((i) => i.title || ''), ...history, ...collectionTitles]) {
+      const k = normalizeTitleKey(t);
+      if (k) excludeSet.add(k);
+  }
+  const excludeList = Array.from(excludeSet).slice(0, TRENDING_HISTORY_CAP);
+  const excludeReason = mode === 'preference'
+      ? (isChinese ? '（含用户已收藏的作品）' : ' (including works already in the user\'s collection)')
+      : '';
+  const excludeStr = excludeList.length > 0
+      ? (isChinese ? `\n\n[排除列表] 以下作品最近展示过或此前已推荐过${excludeReason}，严禁再次推荐，必须推荐其他不同的作品：${excludeList.join('、')}。`
+                   : `\n\n[Exclude List] The following works were shown recently or recommended before${excludeReason}. Do NOT include them again; you MUST recommend DIFFERENT works: ${excludeList.join(', ')}.`)
       : "";
 
   let userPrompt = "";
 
-  if (trendingPrompt && trendingPrompt.trim()) {
+  if (mode === 'custom' && trendingPrompt && trendingPrompt.trim()) {
       userPrompt = trendingPrompt;
       userPrompt += excludeStr;
-      userPrompt += isChinese 
+      userPrompt += isChinese
         ? `\n\n[系统提示] 当前日期: ${today}。
         1. 你拥有一个 'web_search' 工具。**你必须先使用该工具进行联网搜索**，获取满足上述要求的最新的影视作品信息。
         2. 不要直接编造数据。请根据搜索结果进行推荐。
-        3. 请务必严格遵守上述提示词中的所有要求，**特别是关于时间/日期的限制**。如果提示词包含具体日期（如"2024-01-01之后"），**必须**严格过滤掉在此日期之前的作品。
+        3. 请务必严格遵守上述提示词中的所有要求，**特别是关于时间/日期的限制**。如果提示词包含具体日期（如”2024-01-01之后”），**必须**严格过滤掉在此日期之前的作品。
         4. 返回的数据必须准确，releaseDate 需尽量精确到年月日。
         5. 务必返回严格合法的JSON数组，不要包含Markdown格式（如 \`\`\`json）。
-        6. 严禁返回任何笼统的平台名称（如"iQIYI"、"Netflix"）、国家类别（如"美国电视剧"）或非具体作品。必须是具体的电影、电视剧或动漫名称。
+        6. 严禁返回任何笼统的平台名称（如”iQIYI”、”Netflix”）、国家类别（如”美国电视剧”）或非具体作品。必须是具体的电影、电视剧或动漫名称。
         7. 严禁返回任何形式的“合集”、“盘点”、“推荐列表”类文章标题（如“2025必看美剧合集”）。必须是单个的具体作品名称。`
-        : `\n\n[System Note] Today's Date: ${today}. 
+        : `\n\n[System Note] Today's Date: ${today}.
         1. You have a 'web_search' tool. **You MUST use this tool first** to search for the latest media works matching the requirements.
         2. Do NOT fabricate data. Recommend based on search results.
-        3. You MUST strictly follow all requirements in the prompt above, **especially regarding time/date limits**. If the prompt contains specific dates (e.g. "after 2024-01-01"), you MUST strictly filter out works released before that date.
+        3. You MUST strictly follow all requirements in the prompt above, **especially regarding time/date limits**. If the prompt contains specific dates (e.g. “after 2024-01-01”), you MUST strictly filter out works released before that date.
         4. Ensure returned data is accurate; releaseDate should be as specific as possible.
         5. Return STRICTLY valid JSON array, do NOT use Markdown format (like \`\`\`json).
-        6. Do NOT return generic platform names (e.g., "iQIYI", "Netflix") or categories (e.g., "US TV Series"). Must be specific movie/series/anime titles.
-        7. Do NOT return collection/compilation titles (e.g., "Top 10 Movies", "Best Series List"). Must be single, specific work titles.`;
-  } else {
-     // Default logic (Unified for all providers)
+        6. Do NOT return generic platform names (e.g. “iQIYI”, “Netflix”) or categories (e.g. “US TV Series”). Must be specific movie/series/anime titles.
+        7. Do NOT return collection/compilation titles (e.g. “Top 10 Movies”, “Best Series List”). Must be single, specific work titles.`;
+  } else if (mode === 'preference') {
+     // Taste-based preset: summarize the user's collection, let the model
+     // infer preferences, then recommend related works they don't own yet.
+     const collection = useCollectionStore.getState().collection;
+     const summary = collection.slice(0, 40).map((i) => {
+         const bits = [i.title, i.type].filter(Boolean);
+         if (i.category) bits.push(String(i.category));
+         return `- ${bits.join('｜')}`;
+     }).join('\n');
      if (isChinese) {
-         userPrompt = `今天是 ${today}。请推荐4部在最近2个月内更新或上映的热门电影、电视剧或动漫。
+         userPrompt = `今天是 ${today}。请先分析下面这份用户媒体收藏列表，总结用户的喜好（偏爱的题材、类型、风格、地区等），然后推荐 4 部与该喜好高度相关的作品。
+
+         [用户收藏列表]（共 ${collection.length} 项${collection.length > 40 ? '，仅列出前 40 项' : ''}）
+         ${summary || '（收藏为空，请按大众热门口味推荐）'}
          ${excludeStr}
-         
+
          **重要执行步骤：**
-         1. **调用 web_search 工具**，搜索关键词: "最新热门电影电视剧 ${monthStr}" 或 "2024年热门影视排行榜"。
-         2. 阅读搜索结果，筛选出在 **最近2个月内** (例如 ${monthStr} 或上个月) 有更新或上映的高热度作品。
+         1. 先从收藏列表归纳用户的口味画像（例如：偏好科幻悬疑类剧集、日式漫画等）。
+         2. **调用 web_search 工具**搜索与该画像匹配的候选作品，核实其真实存在及信息准确。
          3. 整理信息，以 JSON 格式返回推荐列表。
-         
+
          要求：
-         1. 必须是 **最近2个月内** 有更新或上映的作品。
+         1. 优先推荐与收藏中反复出现的题材/类型相同或强相关的其他作品。
+         2. 严禁推荐[用户收藏列表]或[排除列表]中已出现的任何作品。
+         3. 新作与经典均可，不限于最近上映，但优先推荐口碑好、评分高的作品。
+         4. releaseDate 字段必须准确。如果是电视剧，请填写 **最新一季** 的首播日期；不确定时填写年份。
+         5. latestUpdateInfo 仅在确定时填写（例如 “第2季 第5集” 或 “已完结”）。
+         6. 严禁返回任何笼统的平台名称（如”iQIYI”、”Netflix”）、国家类别（如”美国电视剧”）或非具体作品。
+         7. 严禁返回任何形式的“合集”、“盘点”、“推荐列表”类文章标题。必须是单个的具体作品名称。`;
+     } else {
+         userPrompt = `Today is ${today}. First analyze the user's media collection below, infer their taste (favorite genres, types, styles, regions), then recommend 4 works strongly related to that taste.
+
+         [User Collection] (${collection.length} items${collection.length > 40 ? ', first 40 listed' : ''})
+         ${summary || '(collection is empty — recommend by general popularity)'}
+         ${excludeStr}
+
+         **Execution Steps:**
+         1. Derive a taste profile from the collection (e.g. prefers sci-fi mystery series, Japanese comics).
+         2. **Call the web_search tool** to find candidate works matching the profile and verify they exist.
+         3. Return the list in JSON format.
+
+         Requirements:
+         1. Prioritize works of the same or closely related genres/types that recur in the collection.
+         2. Do NOT recommend anything already in [User Collection] or [Exclude List].
+         3. New and classic works are both fine — not limited to recent releases — but favor well-reviewed, highly rated works.
+         4. releaseDate MUST be accurate. For TV series use the premiere date of the **LATEST SEASON**; use just the year when unsure.
+         5. Only fill latestUpdateInfo when you are sure.
+         6. Do NOT return generic platform names or categories. Must be specific titles.
+         7. Do NOT return collection/compilation titles. Must be single, specific work titles.`;
+     }
+  } else {
+     // 'recent' — time-based preset: hottest / highest-rated of the last 3 months.
+     if (isChinese) {
+         userPrompt = `今天是 ${today}。请推荐 4 部最近 3 个月内更新、上映或完结的最热门、评分最高的电影、电视剧或动漫。
+         ${excludeStr}
+
+         **重要执行步骤：**
+         1. **调用 web_search 工具**，搜索关键词: “最热门电影电视剧 ${monthStr}” 或 “${currentYear} 高分影视排行榜”。
+         2. 阅读搜索结果，筛选出在 **最近 3 个月内** 有更新、上映或完结的高热度、高评分作品。
+         3. 整理信息，以 JSON 格式返回推荐列表。
+
+         要求：
+         1. 必须是 **最近 3 个月内** 有更新、上映或完结的作品，且优先选择热度最高、评分最高的。
          2. **必须** 基于联网搜索结果进行推荐。
          3. 严禁推荐几年前的老片，除非它最近有新季度更新。
          4. releaseDate 字段必须准确。如果是电视剧，请填写 **最新一季** 的首播日期。
-         5. 返回字段中的 latestUpdateInfo 必须准确（例如 "第2季 第5集" 或 "已完结"）。
+         5. 返回字段中的 latestUpdateInfo 必须准确（例如 “第2季 第5集” 或 “已完结”）。
          6. 确保上映日期真实准确，不要捏造未来的日期，除非确有官方定档信息。
-         7. 严禁返回任何笼统的平台名称（如"iQIYI"、"Netflix"）、国家类别（如"美国电视剧"）或非具体作品。
+         7. 严禁返回任何笼统的平台名称（如”iQIYI”、”Netflix”）、国家类别（如”美国电视剧”）或非具体作品。
          8. 严禁返回任何形式的“合集”、“盘点”、“推荐列表”类文章标题。必须是单个的具体作品名称。`;
      } else {
-         userPrompt = `Today is ${today}. Recommend 4 trending movies, TV series, or dramas that have been updated or released within the last 2 months.
+         userPrompt = `Today is ${today}. Recommend 4 of the most popular and highest-rated movies, TV series, or anime that were updated, released, or completed within the last 3 months.
          ${excludeStr}
-         
+
          **Execution Steps:**
-         1. **Call the web_search tool** with queries like: "trending movies tv series ${monthStr} ${currentYear}".
-         2. Analyze the results and select high-popularity works updated or released within the **last 2 months**.
+         1. **Call the web_search tool** with queries like: “trending movies tv series ${monthStr}” or “best rated shows ${currentYear}”.
+         2. Analyze the results and select the hottest, highest-rated works updated, released, or completed within the **last 3 months**.
          3. Return the list in JSON format.
-         
+
          Requirements:
-         1. Must be updated or released within the **last 2 months**.
+         1. Must have been updated, released, or completed within the **last 3 months**; prefer the most popular and highest rated.
          2. **MUST** prioritize selection from web search results.
          3. Do NOT recommend old content unless it has a very recent new season.
          4. releaseDate MUST be accurate. For TV Series, use the premiere date of the **LATEST SEASON**.
          5. Ensure latestUpdateInfo is accurate.
          6. Ensure release dates are factual.
-         7. Do NOT return generic platform names (e.g., "iQIYI", "Netflix") or categories. Must be specific titles.
+         7. Do NOT return generic platform names (e.g. “iQIYI”, “Netflix”) or categories. Must be specific titles.
          8. Do NOT return collection/compilation titles. Must be single, specific work titles.`;
      }
   }
@@ -4164,7 +4379,6 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
       seenTrendingTitles.add(k);
       return true;
   });
-  if (rawData.length > 4) rawData = rawData.slice(0, 4);
 
   // Filter out generic titles
   const isGenericTitle = (title: string) => {
@@ -4195,6 +4409,14 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
   };
 
   rawData = rawData.filter(item => item && item.title && !isGenericTitle(item.title));
+
+  // Enforce the exclude list locally too: the model sometimes ignores it, and
+  // dropping those entries here is what guarantees every round differs.
+  rawData = rawData.filter(item => !excludeSet.has(normalizeTitleKey(String(item?.title || ''))));
+
+  if (rawData.length > 4) rawData = rawData.slice(0, 4);
+  // Remember what we are about to serve so the next round excludes it.
+  if (rawData.length > 0) appendTrendingHistory(rawData.map((item) => String(item.title || '')));
 
   if (rawData.length < 4 && searchContext) {
       try {
