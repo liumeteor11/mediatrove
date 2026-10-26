@@ -81,8 +81,7 @@ export const ShareCardModal: React.FC<ShareCardModalProps> = ({ item, onClose })
             ref={cardRef}
             className={clsx(
                 "w-[300px] bg-theme-surface rounded-xl overflow-hidden shadow-2xl relative border border-theme-border/50 shrink-0",
-                theme === 'cyberpunk' && "border-theme-accent shadow-[0_0_15px_rgba(0,255,255,0.3)]",
-                theme === 'gradient' && "bg-gradient-to-br from-theme-surface to-theme-bg"
+                theme === 'cyberpunk' && "border-theme-accent shadow-[0_0_15px_rgba(0,255,255,0.3)]"
             )}
           >
             {/* Poster Image */}
