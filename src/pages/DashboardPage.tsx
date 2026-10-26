@@ -3,6 +3,7 @@ import { useCollectionStore } from '../store/useCollectionStore';
 import { useThemeStore } from '../store/useThemeStore';
 import { AIConfigPanel } from '../components/AIConfigPanel';
 import { McpPanel } from '../components/McpPanel';
+import { UpdateButton } from '../components/UpdateButton';
 import { ImportMediaModal } from '../components/ImportMediaModal';
 import { SyncModal } from '../components/SyncModal';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -307,11 +308,12 @@ export const DashboardPage: React.FC = () => {
             <button
               onClick={() => setIsSyncOpen(true)}
               className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors text-theme-subtext hover:text-theme-text hover:bg-theme-surface/50 focus:outline-none focus:ring-2 focus:ring-theme-accent"
-              title="Sync Devices"
+              title={t('dashboard.sync')}
             >
               <Wifi className="w-4 h-4" />
-              <span className="hidden sm:inline">Sync</span>
+              <span className="hidden sm:inline">{t('dashboard.sync')}</span>
             </button>
+            <UpdateButton />
         </div>
       </div>
 

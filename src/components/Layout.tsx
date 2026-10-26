@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { v4 as uuidv4 } from 'uuid';
 import { useThemeStore } from '../store/useThemeStore';
+import { useAppUpdateStore } from '../store/useAppUpdateStore';
 import { useCollectionStore } from '../store/useCollectionStore';
 import { useCharacterStore } from '../store/useCharacterStore';
 import { sendCharacterMessage } from '../services/characterService';
@@ -19,6 +20,12 @@ const isTauri = typeof window !== 'undefined' && (('__TAURI__' in window) || ('_
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { theme } = useThemeStore();
   const { t } = useTranslation();
+
+  // One silent app-update check per launch; the result feeds the dashboard
+  // button (useAppUpdateStore) and a toast when a new release is out.
+  useEffect(() => {
+    void useAppUpdateStore.getState().silentCheck();
+  }, []);
 
   useEffect(() => {
     const root = window.document.documentElement;

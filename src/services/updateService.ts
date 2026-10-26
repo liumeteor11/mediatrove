@@ -61,3 +61,36 @@ export const downloadAndInstallAppUpdate = async (
 export const relaunchApp = async (): Promise<void> => {
   await relaunch();
 };
+
+export interface UpdateErrorInfo {
+  /** i18n key suffix under `update.error.*` describing the root cause */
+  key: string;
+  params?: Record<string, unknown>;
+  /** Original error text, shown to the user for transparency */
+  raw?: string;
+}
+
+// Updater errors arrive as free-form strings from the Rust plugin. Classify
+// them by substring so the UI can explain the actual failure reason
+// (offline, GitHub rate limit, missing latest.json, bad signature, ...).
+// Order matters: more specific patterns must be matched first.
+export const describeUpdateError = (error: unknown): UpdateErrorInfo => {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const s = raw.toLowerCase();
+  const pick = (key: string, params?: Record<string, unknown>): UpdateErrorInfo => ({
+    key,
+    params,
+    raw: raw || undefined,
+  });
+
+  if (/(timed?\s*out|timeout)/.test(s)) return pick('timeout');
+  if (/(dns|getaddrinfo|name\s*resolution|name or service not known|resolve)/.test(s)) return pick('network');
+  if (/(tls|ssl|certificate)/.test(s)) return pick('tls');
+  if (/(signature|pubkey|public\s*key|verify)/.test(s)) return pick('signature');
+  if (/(404|not\s*found|no\s*release|norelease)/.test(s)) return pick('not_found');
+  if (/(403|rate\s*limit|too\s*many\s*requests)/.test(s)) return pick('rate_limit');
+  if (/(40[0589]|50\d|internal\s*server|bad\s*gateway|service\s*unavailable)/.test(s)) return pick('server');
+  if (/(parse|decode|malformed|unexpected|invalid|json)/.test(s)) return pick('parse');
+  if (/(network|connect|unreachable|reset|refused|aborted|offline|socket|proxy)/.test(s)) return pick('network');
+  return pick('unknown');
+};

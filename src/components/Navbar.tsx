@@ -5,7 +5,6 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useThemeStore, Theme } from '../store/useThemeStore';
 import { useTranslation } from 'react-i18next';
 import { getAIDate } from '../services/aiService';
-import { UpdateButton } from './UpdateButton';
 import clsx from 'clsx';
 
 export const Navbar: React.FC = () => {
@@ -35,7 +34,6 @@ export const Navbar: React.FC = () => {
     { id: 'doraemon', name: 'Doraemon' },
     { id: 'cyberpunk', name: 'Cyberpunk' },
     { id: 'scandinavian', name: 'Minimal' },
-    { id: 'gradient', name: 'Gradient' },
   ];
 
   const languages = [
@@ -106,9 +104,6 @@ export const Navbar: React.FC = () => {
               ))}
 
 
-
-              {/* Update Checker */}
-              <UpdateButton />
 
               {/* Language Dropdown */}
               <div className="relative" ref={langDropdownRef}>

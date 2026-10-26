@@ -1,80 +1,71 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getVersion } from '@tauri-apps/api/app';
 import { RefreshCw, ArrowDownToLine, RotateCw, X } from 'lucide-react';
 import clsx from 'clsx';
 import { toast } from 'react-toastify';
-import {
-  checkForAppUpdate,
-  downloadAndInstallAppUpdate,
-  relaunchApp,
-  isUpdaterSupported,
-  type AppUpdateInfo
-} from '../services/updateService';
+import { isUpdaterSupported, describeUpdateError } from '../services/updateService';
+import { useAppUpdateStore } from '../store/useAppUpdateStore';
 
-// Navbar entry for in-app updates: silently checks once on mount, shows a
-// badge when a new release is published on GitHub, and offers a one-click
-// download + install + relaunch flow in a modal.
+// Dashboard entry for in-app updates: a labeled text button that checks GitHub
+// releases, shows a badge state when a new version is published, and offers a
+// one-click download + install + relaunch flow in a modal. The silent
+// once-per-launch check lives in Layout (useAppUpdateStore.silentCheck).
 export const UpdateButton: React.FC = () => {
   const { t } = useTranslation();
-  const [currentVersion, setCurrentVersion] = useState('');
-  const [update, setUpdate] = useState<AppUpdateInfo | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [installed, setInstalled] = useState(false);
-  const [downloaded, setDownloaded] = useState(0);
-  const [total, setTotal] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!isUpdaterSupported) return;
-    getVersion().then(setCurrentVersion).catch(() => {});
-    // One silent check per launch; failures stay quiet for offline users.
-    checkForAppUpdate(true).then((info) => {
-      if (info) {
-        setUpdate(info);
-        toast.info(t('update.available_toast', { version: info.version }));
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const {
+    currentVersion,
+    update,
+    checking,
+    downloading,
+    installed,
+    downloaded,
+    total,
+    checkNow,
+    install,
+    relaunch
+  } = useAppUpdateStore();
 
   if (!isUpdaterSupported) return null;
+
+  // Explain the failure instead of surfacing a raw plugin error: friendly
+  // reason + suggestion from describeUpdateError, plus the original message.
+  const showError = (e: unknown, titleKey: 'update.check_failed' | 'update.update_failed') => {
+    const info = describeUpdateError(e);
+    toast.error(
+      <div className="text-left">
+        <p className="font-semibold">{t(titleKey)}</p>
+        <p className="text-xs mt-1 leading-relaxed">{t(`update.error.${info.key}`, info.params)}</p>
+        {info.raw && (
+          <p className="text-[10px] font-mono opacity-60 mt-1 break-all">{info.raw}</p>
+        )}
+      </div>,
+      { autoClose: 10000 }
+    );
+  };
 
   const handleClick = async () => {
     if (update) {
       setShowModal(true);
       return;
     }
-    setChecking(true);
     try {
-      const info = await checkForAppUpdate(false);
-      if (info) {
-        setUpdate(info);
+      const found = await checkNow();
+      if (found) {
         setShowModal(true);
       } else {
         toast.info(t('update.up_to_date'));
       }
-    } catch (e: any) {
-      toast.error(`${t('update.check_failed')} ${e?.message || ''}`);
-    } finally {
-      setChecking(false);
+    } catch (e) {
+      showError(e, 'update.check_failed');
     }
   };
 
   const handleInstall = async () => {
-    setDownloading(true);
-    setInstalled(false);
     try {
-      await downloadAndInstallAppUpdate((done, tot) => {
-        setDownloaded(done);
-        setTotal(tot);
-      });
-      setInstalled(true);
-    } catch (e: any) {
-      toast.error(`${t('update.update_failed')} ${e?.message || ''}`);
-    } finally {
-      setDownloading(false);
+      await install();
+    } catch (e) {
+      showError(e, 'update.update_failed');
     }
   };
 
@@ -84,12 +75,28 @@ export const UpdateButton: React.FC = () => {
     <>
       <button
         onClick={handleClick}
-        className="relative flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap flex-shrink-0 transition-colors text-theme-subtext hover:text-theme-text hover:bg-theme-surface/50 focus:outline-none focus:ring-2 focus:ring-theme-accent"
+        className={clsx(
+          'relative flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap flex-shrink-0 transition-colors focus:outline-none focus:ring-2 focus:ring-theme-accent',
+          update && !showModal
+            ? 'text-theme-accent hover:bg-theme-accent/10'
+            : 'text-theme-subtext hover:text-theme-text hover:bg-theme-surface/50'
+        )}
         title={t('update.button_tooltip')}
       >
-        <RefreshCw className={clsx("w-4 h-4", checking && "animate-spin")} />
+        {update ? (
+          <ArrowDownToLine className="w-4 h-4" />
+        ) : (
+          <RefreshCw className={clsx('w-4 h-4', checking && 'animate-spin')} />
+        )}
+        <span className="hidden sm:inline">
+          {update
+            ? t('update.update_available_short', { version: update.version })
+            : checking
+              ? t('update.checking')
+              : t('update.button_label')}
+        </span>
         {update && !showModal && (
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500 animate-pulse sm:hidden" />
         )}
       </button>
 
@@ -155,7 +162,7 @@ export const UpdateButton: React.FC = () => {
             <div className="p-4 border-t border-theme-border flex justify-end gap-2">
               {installed ? (
                 <button
-                  onClick={() => relaunchApp()}
+                  onClick={relaunch}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg bg-theme-accent text-theme-bg font-bold hover:bg-theme-accent-hover transition-colors"
                 >
                   <RotateCw className="w-4 h-4" />
