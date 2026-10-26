@@ -55,7 +55,8 @@ const SortableItem = ({ item, index, onClick, onAction, isSelectionMode, isSelec
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 50 : undefined,
+    // Above sibling cards, below the sticky navbar (z-50).
+    zIndex: isDragging ? 20 : undefined,
     opacity: isDragging ? 0.5 : 1,
   };
 

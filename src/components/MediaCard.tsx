@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Star, Clock, Calendar, Heart, Check, Bookmark, MoreVertical, Info, Bell, BellOff, RefreshCw, Edit, Trash2, User, Users, Plus, Minus, ChevronsUp, Tags, Layers, FolderPlus } from 'lucide-react';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
@@ -137,12 +137,23 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
   const fallbackPoster = FALLBACK_POSTER;
   const [imgSrc, setImgSrc] = useState(normalizeImgSrc(item.customPosterUrl || item.posterUrl) || fallbackPoster);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     setImgSrc(normalizeImgSrc(item.customPosterUrl || item.posterUrl) || fallbackPoster);
     setImgLoading(true);
     setImgFailed(false);
   }, [item.customPosterUrl, item.posterUrl]);
+
+  // A cached image can be fully loaded before React attaches onLoad, which
+  // would leave the poster hidden behind the loading state forever.
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el?.complete) return;
+    if (el.naturalWidth === 0) handleImageError();
+    else setImgLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imgSrc]);
 
   const handleImageError = () => {
       setImgSrc(FALLBACK_POSTER);
@@ -234,9 +245,11 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         animate={layoutId ? undefined : { opacity: 1, y: 0 }}
         transition={{ delay: layoutId ? 0 : index * 0.1, duration: 0.5 }}
         className={clsx(
-          "group relative w-full h-full perspective-1000", 
-          // Desktop: Elevate z-index on hover to prevent clipping during scaling
-          "md:hover:z-50",
+          "group relative w-full h-full perspective-1000",
+          // Elevate above grid siblings while flipped/scaling, but stay below
+          // the sticky navbar (z-50) so the flipped card can never cover the
+          // top button bars.
+          "md:hover:z-20",
           className
         )}
         onMouseEnter={() => !isMobile && !isEditModalOpen && setIsFlipped(true)}
@@ -254,12 +267,11 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             // Hardware acceleration hints
             "will-change-transform backface-visibility-hidden",
             isFlipped ? "rotate-y-180" : "",
-            // Desktop: Scale up on hover
-            !isMobile && !isEditModalOpen && "md:group-hover:scale-105 md:group-hover:shadow-2xl",
+            // Depth only — no scale on hover: scaling plus the 3D flip makes
+            // the card project past its grid cell onto the bars above.
+            !isMobile && !isEditModalOpen && "md:group-hover:shadow-2xl",
             // Cyberpunk specific glow
-            theme === 'cyberpunk' && "border border-transparent hover:border-theme-accent hover:shadow-[0_0_20px_var(--accent-primary)]",
-            // Gradient specific
-            theme === 'gradient' && "backdrop-blur-sm border border-white/20"
+            theme === 'cyberpunk' && "border border-transparent hover:border-theme-accent hover:shadow-[0_0_20px_var(--accent-primary)]"
           )}
         >
           {/* Front Side */}
@@ -313,6 +325,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
               
               <img
                 key={imgSrc}
+                ref={imgRef}
                 src={imgSrc}
                 alt={item.title}
                 onError={handleImageError}
