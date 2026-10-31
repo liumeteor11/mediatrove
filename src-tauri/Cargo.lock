@@ -2454,7 +2454,7 @@ dependencies = [
 
 [[package]]
 name = "mediatrove"
-version = "0.1.0"
+version = "0.1.26"
 dependencies = [
  "argon2",
  "axum",

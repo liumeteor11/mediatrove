@@ -1,6 +1,6 @@
 [package]
 name = "mediatrove"
-version = "0.1.0"
+version = "0.1.26"
 description = "Your AI-powered media trove: search, track and chat with characters"
 authors = ["you"]
 edition = "2021"
