@@ -247,13 +247,14 @@ const buildDistillUserPrompt = (item: MediaItem, opts: DistillOptions, creditLin
 const searchBackendConfigured = (): boolean => {
   const {
     searchProvider,
-    getDecryptedGoogleKey,
-    googleSearchCx,
+    getDecryptedVertexKey,
+    vertexSearchProject,
+    vertexSearchEngine,
     getDecryptedSerperKey,
     getDecryptedYandexKey,
     yandexSearchLogin,
   } = useAIStore.getState();
-  if (searchProvider === 'google') return !!(getDecryptedGoogleKey() && googleSearchCx);
+  if (searchProvider === 'vertex') return !!(getDecryptedVertexKey() && vertexSearchProject && vertexSearchEngine);
   if (searchProvider === 'serper') return !!getDecryptedSerperKey();
   if (searchProvider === 'yandex') return !!(getDecryptedYandexKey() && yandexSearchLogin);
   return true; // duckduckgo needs no credentials
@@ -352,6 +353,7 @@ export const distillCharacters = async (
       maxTokens: DISTILL_MAX_TOKENS,
       forceSearch: search,
       disableSearch: !search,
+      reasoningEffort: useAIStore.getState().distillReasoning,
     });
     if (!text) throw new Error('empty-ai-response');
     return extractJsonArray(text);
@@ -489,12 +491,12 @@ export const suggestCharacterNames = async (
     }).slice(0, limit);
   };
 
-  let fromAI = cleanNames(await callAI(messages, 0.2, { maxTokens: SUGGEST_MAX_TOKENS, forceSearch: hasSearchBackend, disableSearch: !hasSearchBackend }));
+  let fromAI = cleanNames(await callAI(messages, 0.2, { maxTokens: SUGGEST_MAX_TOKENS, forceSearch: hasSearchBackend, disableSearch: !hasSearchBackend, reasoningEffort: useAIStore.getState().distillReasoning }));
   if (fromAI.length === 0) {
     // Nothing usable — typically the model answered with a leaked tool call.
     // Ask once more with no tools in scope and an explicit format nudge.
     messages.push({ role: 'user', content: 'Output only the JSON array of character-name strings now. Do not call or name any tool.' });
-    fromAI = cleanNames(await callAI(messages, 0.2, { maxTokens: SUGGEST_MAX_TOKENS, disableSearch: true }));
+    fromAI = cleanNames(await callAI(messages, 0.2, { maxTokens: SUGGEST_MAX_TOKENS, disableSearch: true, reasoningEffort: useAIStore.getState().distillReasoning }));
   }
 
   const result: CharacterNameSuggestions = { fromCredits: fromCredits.slice(0, limit), fromAI };

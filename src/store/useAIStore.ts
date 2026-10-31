@@ -11,7 +11,7 @@ const SECRET_KEY = import.meta.env.VITE_SECRET_KEY || 'media-tracker-ai-config-s
 
 
 export type AIProvider = 'moonshot' | 'openai' | 'deepseek' | 'qwen' | 'google' | 'mistral' | 'mimo' | 'zhipu' | 'custom';
-export type SearchProvider = 'google' | 'serper' | 'yandex' | 'duckduckgo';
+export type SearchProvider = 'vertex' | 'serper' | 'yandex' | 'duckduckgo';
 
 // Trending recommendation modes for the search landing page:
 // - 'recent':     time-based preset — hottest / highest-rated works of the last 3 months
@@ -31,8 +31,10 @@ interface AIConfigState {
   // Search Configuration
   enableSearch: boolean;
   searchProvider: SearchProvider;
-  googleSearchApiKey: string;
-  googleSearchCx: string;
+  vertexSearchApiKey: string;
+  vertexSearchProject: string;
+  vertexSearchEngine: string;
+  vertexSearchLocation: string;
   serperApiKey: string;
   yandexSearchApiKey: string;
   yandexSearchLogin: string;
@@ -43,6 +45,10 @@ interface AIConfigState {
   enableBangumi: boolean;
   enableNetworking: boolean;
   reasoningEffort: ReasoningLevel;
+  /** Thinking effort for the search/trending flow (default off). */
+  searchReasoning: ReasoningLevel;
+  /** Thinking effort for character distillation (default on = auto). */
+  distillReasoning: ReasoningLevel;
   enableTrending: boolean;
   trendingMode: TrendingMode;
   trendingPrompt: string;
@@ -75,9 +81,9 @@ interface AIConfigState {
   removeDomain: (type: 'movie_tv' | 'book' | 'comic' | 'music' | 'poster', domain: string) => void;
   
   setProvider: (provider: AIProvider) => void;
-  setConfig: (config: Partial<Omit<AIConfigState, 'setProvider' | 'setConfig' | 'getDecryptedApiKey' | 'getDecryptedGoogleKey' | 'getDecryptedSerperKey' | 'getDecryptedYandexKey' | 'getDecryptedOmdbKey' | 'getDecryptedTmdbKey' | 'getDecryptedBangumiToken'>>) => void;
+  setConfig: (config: Partial<Omit<AIConfigState, 'setProvider' | 'setConfig' | 'getDecryptedApiKey' | 'getDecryptedVertexKey' | 'getDecryptedSerperKey' | 'getDecryptedYandexKey' | 'getDecryptedOmdbKey' | 'getDecryptedTmdbKey' | 'getDecryptedBangumiToken'>>) => void;
   getDecryptedApiKey: () => string;
-  getDecryptedGoogleKey: () => string;
+  getDecryptedVertexKey: () => string;
   getDecryptedSerperKey: () => string;
   getDecryptedYandexKey: () => string;
   getDecryptedOmdbKey: () => string;
@@ -132,9 +138,11 @@ export const useAIStore = create<AIConfigState>()(
       maxTokens: 2000,
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
       enableSearch: true,
-      searchProvider: 'google',
-      googleSearchApiKey: '',
-      googleSearchCx: '',
+      searchProvider: 'duckduckgo',
+      vertexSearchApiKey: '',
+      vertexSearchProject: '',
+      vertexSearchEngine: '',
+      vertexSearchLocation: 'global',
       serperApiKey: '',
       yandexSearchApiKey: '',
       yandexSearchLogin: '',
@@ -145,6 +153,8 @@ export const useAIStore = create<AIConfigState>()(
       enableBangumi: true,
       enableNetworking: true,
       reasoningEffort: 'auto',
+      searchReasoning: 'off',
+      distillReasoning: 'auto',
       enableTrending: true,
       trendingMode: 'recent',
       trendingPrompt: '',
@@ -224,7 +234,7 @@ export const useAIStore = create<AIConfigState>()(
             break;
           case 'deepseek':
             defaultBaseUrl = 'https://api.deepseek.com';
-            defaultModel = 'deepseek-v4-pro';
+            defaultModel = 'deepseek-flash';
             break;
           case 'qwen':
             defaultBaseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
@@ -273,7 +283,7 @@ export const useAIStore = create<AIConfigState>()(
           updates.apiKey = config.apiKey ? encrypt(config.apiKey) : '';
           updates.apiKeyProvider = config.apiKey ? (config.provider ?? state.provider) : '';
         }
-        if (config.googleSearchApiKey) updates.googleSearchApiKey = encrypt(config.googleSearchApiKey);
+        if (config.vertexSearchApiKey) updates.vertexSearchApiKey = encrypt(config.vertexSearchApiKey);
         if (config.serperApiKey) updates.serperApiKey = encrypt(config.serperApiKey);
         if (config.yandexSearchApiKey) updates.yandexSearchApiKey = encrypt(config.yandexSearchApiKey);
         if (config.omdbApiKey) updates.omdbApiKey = encrypt(config.omdbApiKey);
@@ -287,7 +297,7 @@ export const useAIStore = create<AIConfigState>()(
         set((state) => ({ ...state, ...updates }));
       },
       getDecryptedApiKey: () => decrypt(get().apiKey),
-      getDecryptedGoogleKey: () => decrypt(get().googleSearchApiKey),
+      getDecryptedVertexKey: () => decrypt(get().vertexSearchApiKey),
       getDecryptedSerperKey: () => decrypt(get().serperApiKey),
       getDecryptedYandexKey: () => decrypt(get().yandexSearchApiKey),
       getDecryptedOmdbKey: () => decrypt(get().omdbApiKey),
@@ -316,6 +326,24 @@ export const useAIStore = create<AIConfigState>()(
         try {
             const [aiConfig, _] = await invoke<[any, any]>('get_app_configs');
             if (aiConfig) {
+                // Same rules as the v10 persist migration: the sunset Google CSE
+                // engine maps to Vertex AI Search, and a keyed engine without
+                // complete credentials falls back to the built-in keyless
+                // DuckDuckGo (the backend config may predate this default).
+                if (String(aiConfig.searchProvider || '') === 'google') {
+                    aiConfig.searchProvider = 'vertex';
+                    if (!aiConfig.vertexSearchApiKey && aiConfig.googleSearchApiKey) {
+                        aiConfig.vertexSearchApiKey = aiConfig.googleSearchApiKey;
+                    }
+                }
+                const engine = String(aiConfig.searchProvider || '');
+                const engineConfigured =
+                    (engine === 'vertex' && !!aiConfig.vertexSearchApiKey && !!aiConfig.vertexSearchProject && !!aiConfig.vertexSearchEngine) ||
+                    (engine === 'serper' && !!aiConfig.serperApiKey) ||
+                    (engine === 'yandex' && !!aiConfig.yandexSearchApiKey && !!aiConfig.yandexSearchLogin);
+                if (engine && engine !== 'duckduckgo' && !engineConfigured) {
+                    aiConfig.searchProvider = 'duckduckgo';
+                }
                 const hasLocal = (() => {
                   try {
                     if (typeof window === 'undefined' || !window.localStorage) return false;
@@ -336,7 +364,7 @@ export const useAIStore = create<AIConfigState>()(
     }),
     {
       name: 'ai-config-storage',
-      version: 8,
+      version: 11,
       storage: createJSONStorage(() => {
         try {
           if (typeof window !== 'undefined' && window.localStorage) {
@@ -361,11 +389,39 @@ export const useAIStore = create<AIConfigState>()(
               return url.trim().replace(/[\s)]+$/g, '').replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '');
             };
             persistedState.baseUrl = sanitizeBaseUrl(persistedState.baseUrl || '');
-            if (persistedState.searchProvider === 'duckduckgo') {
-              persistedState.searchProvider = 'google';
-            }
+            // v9: the keyless built-in DuckDuckGo engine is the default; a keyed
+            // engine (Serper/Yandex) is only kept when its credentials exist
+            // (stored keys are AES ciphertext — presence is a valid check).
             if (persistedState.searchProvider === 'metaso') {
-              persistedState.searchProvider = 'google';
+              persistedState.searchProvider = 'duckduckgo';
+            }
+            // v10: Google Custom Search JSON API is sunset (closed to new
+            // sign-ups, serving ends 2027-01-01) — replaced by Vertex AI Search
+            // (Agent Search). Carry the API key over (it can be re-enabled for
+            // the Discovery Engine API in the same project); the Programmable
+            // Search Engine CX has no Vertex equivalent and is dropped. An
+            // incomplete Vertex config falls back to the keyless DuckDuckGo.
+            if (persistedState.searchProvider === 'google') {
+              persistedState.searchProvider = 'vertex';
+              if (!persistedState.vertexSearchApiKey && persistedState.googleSearchApiKey) {
+                persistedState.vertexSearchApiKey = persistedState.googleSearchApiKey;
+              }
+            }
+            if ('googleSearchApiKey' in persistedState) {
+              try { delete persistedState.googleSearchApiKey; } catch {}
+            }
+            if ('googleSearchCx' in persistedState) {
+              try { delete persistedState.googleSearchCx; } catch {}
+            }
+            if (persistedState.searchProvider && persistedState.searchProvider !== 'duckduckgo') {
+              const engine = String(persistedState.searchProvider);
+              const engineConfigured =
+                (engine === 'vertex' && !!persistedState.vertexSearchApiKey && !!persistedState.vertexSearchProject && !!persistedState.vertexSearchEngine) ||
+                (engine === 'serper' && !!persistedState.serperApiKey) ||
+                (engine === 'yandex' && !!persistedState.yandexSearchApiKey && !!persistedState.yandexSearchLogin);
+              if (!engineConfigured) {
+                persistedState.searchProvider = 'duckduckgo';
+              }
             }
             if ('metasoApiKey' in persistedState) {
               try { delete persistedState.metasoApiKey; } catch {}
@@ -393,7 +449,12 @@ export const useAIStore = create<AIConfigState>()(
               persistedState.model = 'kimi-k3';
             }
             if (prov === 'deepseek' && (persistedState.model === 'deepseek-chat' || persistedState.model === 'deepseek-reasoner')) {
-              persistedState.model = 'deepseek-v4-flash';
+              persistedState.model = 'deepseek-flash';
+            }
+            // v11: the provider retired the v4.1-flash / v4-flash / v3-2 ids;
+            // the published flash model is deepseek-flash.
+            if (prov === 'deepseek' && (persistedState.model === 'deepseek-v4.1-flash' || persistedState.model === 'deepseek-v4-flash' || persistedState.model === 'deepseek-v3-2')) {
+              persistedState.model = 'deepseek-flash';
             }
             if (prov === 'openai' && (persistedState.model === 'gpt-4o' || persistedState.model === 'gpt-4.1' || persistedState.model === 'gpt-4.1-mini')) {
               persistedState.model = 'gpt-5.6-terra';
@@ -457,8 +518,10 @@ export const useAIStore = create<AIConfigState>()(
         systemPrompt: state.systemPrompt,
         enableSearch: state.enableSearch,
         searchProvider: state.searchProvider,
-        googleSearchApiKey: state.googleSearchApiKey,
-        googleSearchCx: state.googleSearchCx,
+        vertexSearchApiKey: state.vertexSearchApiKey,
+        vertexSearchProject: state.vertexSearchProject,
+        vertexSearchEngine: state.vertexSearchEngine,
+        vertexSearchLocation: state.vertexSearchLocation,
         serperApiKey: state.serperApiKey,
         yandexSearchApiKey: state.yandexSearchApiKey,
         yandexSearchLogin: state.yandexSearchLogin,
@@ -469,6 +532,8 @@ export const useAIStore = create<AIConfigState>()(
         enableBangumi: state.enableBangumi,
         enableNetworking: state.enableNetworking,
         reasoningEffort: state.reasoningEffort,
+        searchReasoning: state.searchReasoning,
+        distillReasoning: state.distillReasoning,
         enableTrending: state.enableTrending,
         trendingMode: state.trendingMode,
         trendingPrompt: state.trendingPrompt,
@@ -503,8 +568,10 @@ useAIStore.subscribe((state) => {
              systemPrompt: state.systemPrompt,
              enableSearch: state.enableSearch,
              searchProvider: state.searchProvider,
-             googleSearchApiKey: state.googleSearchApiKey,
-             googleSearchCx: state.googleSearchCx,
+             vertexSearchApiKey: state.vertexSearchApiKey,
+             vertexSearchProject: state.vertexSearchProject,
+             vertexSearchEngine: state.vertexSearchEngine,
+             vertexSearchLocation: state.vertexSearchLocation,
              serperApiKey: state.serperApiKey,
              yandexSearchApiKey: state.yandexSearchApiKey,
              yandexSearchLogin: state.yandexSearchLogin,
@@ -515,6 +582,8 @@ useAIStore.subscribe((state) => {
              enableBangumi: state.enableBangumi,
              enableNetworking: state.enableNetworking,
              reasoningEffort: state.reasoningEffort,
+             searchReasoning: state.searchReasoning,
+             distillReasoning: state.distillReasoning,
              enableTrending: state.enableTrending,
              trendingMode: state.trendingMode,
              trendingPrompt: state.trendingPrompt,

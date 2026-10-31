@@ -43,8 +43,11 @@ struct AppState {
 struct SearchConfig {
     provider: String,
     api_key: Option<String>,
-    cx: Option<String>,
+    cx: Option<String>, // legacy Custom Search engine id (no longer used; kept so old saved configs still deserialize)
     user: Option<String>,
+    project: Option<String>,  // Vertex AI Search: GCP project id
+    engine: Option<String>,   // Vertex AI Search: engine (app) id
+    location: Option<String>, // Vertex AI Search: global | eu | us
     search_type: Option<String>, // "text" or "image"
     proxy_url: Option<String>,
     use_system_proxy: Option<bool>,
@@ -181,60 +184,90 @@ fn client_with_proxy(proxy_url: Option<String>, use_system_proxy: Option<bool>) 
 }
 // --- Search Logic (Same as before) ---
 
-async fn google_search(client: &Client, query: &str, api_key: &str, cx: &str, search_type: Option<&str>) -> Result<Vec<SearchResultItem>, Box<dyn Error + Send + Sync>> {
-    let mut url = format!(
-        "https://www.googleapis.com/customsearch/v1?key={}&cx={}&q={}&safe=off&num=8",
-        api_key,
-        cx,
-        urlencoding::encode(query)
+/// Vertex AI Search (Agent Search) via the API-key `searchLite` variant.
+/// Only public-website data stores are searchable this way, which matches this
+/// app's use case. Google sunset the Custom Search JSON API (no new sign-ups,
+/// serving ends 2027-01-01) and names Vertex AI Search as its replacement.
+async fn vertex_search(client: &Client, query: &str, api_key: &str, project: &str, engine: &str, location: &str) -> Result<Vec<SearchResultItem>, Box<dyn Error + Send + Sync>> {
+    let host = if location == "global" || location.is_empty() {
+        "discoveryengine.googleapis.com".to_string()
+    } else {
+        format!("{}-discoveryengine.googleapis.com", location)
+    };
+    let url = format!(
+        "https://{}/v1/projects/{}/locations/{}/collections/default_collection/engines/{}/servingConfigs/default_search:searchLite?key={}",
+        host,
+        urlencoding::encode(project),
+        urlencoding::encode(location),
+        urlencoding::encode(engine),
+        urlencoding::encode(api_key)
     );
-    
-    if let Some("image") = search_type {
-        url.push_str("&searchType=image");
-    }
-    
-    let fut = client.get(&url).send();
+
+    let fut = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "query": query, "pageSize": 8 }))
+        .send();
     let resp = tokio::time::timeout(std::time::Duration::from_secs(30), fut)
         .await??;
 
     if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return Err("Google Search Quota Exceeded (429). Please check your API key billing/quota.".into());
+        return Err("Vertex AI Search Quota Exceeded (429). Please check your API key billing/quota.".into());
     }
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Google API Error ({}): {}", status, text).into());
+        return Err(format!("Vertex AI Search API Error ({}): {}", status, text).into());
     }
 
     let resp = resp.json::<Value>().await?;
-    
-    let mut results = Vec::new();
-    if let Some(items) = resp["items"].as_array() {
-        for item in items {
-            let title = item["title"].as_str().unwrap_or("").to_string();
-            let snippet = item["snippet"].as_str().unwrap_or("").to_string();
-            let link = item["link"].as_str().unwrap_or("").to_string();
-            
-            // For image search, 'link' is often the image URL, or it's in 'link' field of the item
-            let mut image = item["pagemap"]["cse_image"][0]["src"].as_str().map(|s| s.to_string());
-            
-            // If explicit image search, try to get high res image from 'link' if it looks like an image, or use thumbnail
-            if search_type == Some("image") {
-                 if let Some(l) = item["link"].as_str() {
-                     if l.ends_with(".jpg") || l.ends_with(".png") || l.ends_with(".jpeg") {
-                         image = Some(l.to_string());
-                     }
-                 }
-            }
 
-            let metadata = item["pagemap"].clone(); 
-            
+    let mut results = Vec::new();
+    if let Some(items) = resp["results"].as_array() {
+        for item in items {
+            let doc = &item["document"];
+            // Website data stores return titles/links/snippets under
+            // document.derivedStructData; structured stores use structData.fields.
+            let derived = &doc["derivedStructData"];
+            let sdata = &doc["structData"]["fields"];
+            let pick_str = |v: &Value| v.as_str().unwrap_or("").trim().to_string();
+            let mut title = pick_str(&derived["title"]);
+            if title.is_empty() { title = pick_str(&sdata["title"]); }
+            let mut link = pick_str(&derived["link"]);
+            if link.is_empty() { link = pick_str(&derived["uri"]); }
+            if link.is_empty() { link = pick_str(&sdata["link"]); }
+            if link.is_empty() { link = pick_str(&sdata["uri"]); }
+
+            let mut snippet = String::new();
+            if let Some(snips) = derived["snippets"].as_array() {
+                for s in snips {
+                    let c = pick_str(&s["snippet"]);
+                    if !c.is_empty() { snippet = c; break; }
+                }
+            }
+            if snippet.is_empty() {
+                if let Some(answers) = derived["extractive_answers"].as_array() {
+                    for a in answers {
+                        let c = pick_str(&a["content"]);
+                        if !c.is_empty() { snippet = c; break; }
+                    }
+                }
+            }
+            if snippet.is_empty() { snippet = pick_str(&sdata["description"]); }
+
+            // No usable title/link: derive one from the document name so the
+            // result still carries something the UI can show.
+            if title.is_empty() && !link.is_empty() {
+                title = link.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+            }
+            if title.is_empty() && link.is_empty() { continue; }
+
             results.push(SearchResultItem {
                 title,
                 snippet,
                 link,
-                image,
-                metadata: Some(metadata),
+                image: None,
+                metadata: Some(doc.clone()),
             });
         }
     }
@@ -818,24 +851,25 @@ async fn web_search(query: String, config: SearchConfig, state: State<'_, AppSta
     }
     
     let result = match config.provider.as_str() {
-        "google" => {
-            if let Some(cx) = cx {
-                if api_keys.is_empty() {
-                    if search_type == Some("image") {
-                        Ok(Vec::new())
-                    } else {
-                        duckduckgo_search(client, &query).await.map_err(|e| e.to_string())
-                    }
-                } else {
-                    search_with_key_rotation(api_keys.clone(), |key| {
-                        let q = query.as_str();
-                        async move { google_search(client, q, &key, cx, search_type).await.map_err(|e| e.to_string()) }
-                    }).await
-                }
-            } else if search_type == Some("image") {
+        "vertex" => {
+            if search_type == Some("image") {
+                // Vertex AI Search has no image-search variant; the caller's
+                // poster chain falls through to the other engines.
                 Ok(Vec::new())
             } else {
-                duckduckgo_search(client, &query).await.map_err(|e| e.to_string())
+                let project = clean_opt(config.project.as_deref());
+                let engine = clean_opt(config.engine.as_deref());
+                let location = clean_opt(config.location.as_deref()).unwrap_or("global");
+                match (project, engine) {
+                    (Some(project), Some(engine)) if !api_keys.is_empty() => {
+                        search_with_key_rotation(api_keys.clone(), |key| {
+                            let q = query.as_str();
+                            async move { vertex_search(client, q, &key, project, engine, location).await.map_err(|e| e.to_string()) }
+                        }).await
+                    }
+                    // Not fully configured: fall through to the keyless engine.
+                    _ => duckduckgo_search(client, &query).await.map_err(|e| e.to_string()),
+                }
             }
         },
         "serper" => {
@@ -927,10 +961,11 @@ async fn test_search_provider(config: SearchConfig, state: State<'_, AppState>) 
 
     let q = "test";
     let res = match config.provider.as_str() {
-        "google" => {
-            if let (Some(key), Some(cx)) = (&config.api_key, &config.cx) {
-                google_search(client, q, key, cx, Some("text")).await
-            } else { Err("Missing Google API Key or CX".into()) }
+        "vertex" => {
+            let location = config.location.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("global");
+            if let (Some(key), Some(project), Some(engine)) = (&config.api_key, &config.project, &config.engine) {
+                vertex_search(client, q, key, project, engine, location).await
+            } else { Err("Missing Vertex AI Search API Key, Project ID or Engine ID".into()) }
         },
         "serper" => {
             if let Some(key) = &config.api_key {
@@ -1021,7 +1056,7 @@ async fn wiki_pageimages(title: String, lang_zh: bool, state: State<'_, AppState
 }
 
 #[command]
-async fn ai_chat(messages: Vec<Value>, temperature: Option<f32>, tools: Option<Value>, extra_body: Option<Value>, config: AIChatConfig, state: State<'_, AppState>) -> Result<String, String> {
+async fn ai_chat(messages: Vec<Value>, temperature: Option<f32>, tools: Option<Value>, tool_choice: Option<Value>, extra_body: Option<Value>, config: AIChatConfig, state: State<'_, AppState>) -> Result<String, String> {
     let start = std::time::Instant::now();
     let api_key = config.api_key.ok_or("Missing API Key")?;
     let raw_base = config.base_url.unwrap_or("https://api.moonshot.cn/v1".to_string());
@@ -1080,7 +1115,9 @@ async fn ai_chat(messages: Vec<Value>, temperature: Option<f32>, tools: Option<V
     }
     if let Some(t) = tools {
         body["tools"] = t;
-        body["tool_choice"] = serde_json::Value::String("auto".to_string());
+        // The frontend may force a named tool (e.g. web_search) for the first
+        // search round; "auto" stays the default when it doesn't.
+        body["tool_choice"] = tool_choice.unwrap_or(serde_json::Value::String("auto".to_string()));
     }
 
     let url = if base_url.ends_with('/') {

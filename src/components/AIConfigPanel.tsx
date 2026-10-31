@@ -26,7 +26,7 @@ export const AIConfigPanel: React.FC = () => {
   ];
 
   const SEARCH_PROVIDER_OPTIONS: { value: SearchProvider; label: string }[] = [
-    { value: 'google', label: t('ai_config.search_provider_google') },
+    { value: 'vertex', label: t('ai_config.search_provider_vertex') },
     { value: 'serper', label: t('ai_config.search_provider_serper') },
     { value: 'yandex', label: t('ai_config.search_provider_yandex') },
     { value: 'duckduckgo', label: t('ai_config.search_provider_duckduckgo') },
@@ -34,11 +34,11 @@ export const AIConfigPanel: React.FC = () => {
 
   const {
     provider, apiKey, apiKeyProvider, model, baseUrl, maxTokens, systemPrompt,
-    enableSearch, searchProvider, googleSearchCx, yandexSearchLogin,
+    enableSearch, searchProvider, vertexSearchProject, vertexSearchEngine, vertexSearchLocation, yandexSearchLogin,
     omdbApiKey, tmdbApiKey, bangumiToken, enableTmdb, enableBangumi,
-    enableNetworking, reasoningEffort, enableTrending, trendingMode, trendingPrompt,
+    enableNetworking, reasoningEffort, searchReasoning, distillReasoning, enableTrending, trendingMode, trendingPrompt,
     useSystemProxy, proxyProtocol, proxyHost, proxyPort, proxyUsername,
-    setProvider, setConfig, getDecryptedApiKey, getDecryptedGoogleKey, getDecryptedSerperKey, getDecryptedYandexKey, getDecryptedOmdbKey, getDecryptedTmdbKey, getDecryptedBangumiToken, getProxyUrl
+    setProvider, setConfig, getDecryptedApiKey, getDecryptedVertexKey, getDecryptedSerperKey, getDecryptedYandexKey, getDecryptedOmdbKey, getDecryptedTmdbKey, getDecryptedBangumiToken, getProxyUrl
   } = useAIStore();
 
   const providerLabel = (value: string) => PROVIDER_OPTIONS.find(opt => opt.value === value)?.label || value;
@@ -47,7 +47,7 @@ export const AIConfigPanel: React.FC = () => {
   const keyProviderMismatch = !!apiKey && apiKeyProvider !== provider;
 
   const [localKey, setLocalKey] = useState(getDecryptedApiKey());
-  const [localGoogleKey, setLocalGoogleKey] = useState(getDecryptedGoogleKey());
+  const [localVertexKey, setLocalVertexKey] = useState(getDecryptedVertexKey());
   const [localSerperKey, setLocalSerperKey] = useState(getDecryptedSerperKey());
   const [localYandexKey, setLocalYandexKey] = useState(getDecryptedYandexKey());
   const [localOmdbKey, setLocalOmdbKey] = useState(getDecryptedOmdbKey());
@@ -59,7 +59,7 @@ export const AIConfigPanel: React.FC = () => {
   const [trendingHistoryCount, setTrendingHistoryCount] = useState(() => getTrendingHistory().length);
   useEffect(() => { setTrendingPromptDraft(trendingPrompt || ''); }, [trendingPrompt]);
   const [showKey, setShowKey] = useState(false);
-  const [showGoogleKey, setShowGoogleKey] = useState(false);
+  const [showVertexKey, setShowVertexKey] = useState(false);
   const [showSerperKey, setShowSerperKey] = useState(false);
   const [showYandexKey, setShowYandexKey] = useState(false);
   const [showOmdbKey, setShowOmdbKey] = useState(false);
@@ -88,14 +88,16 @@ export const AIConfigPanel: React.FC = () => {
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
 
   const handleTestSearch = async () => {
-    if (searchProvider === 'google' && !localGoogleKey) return toast.error(t('ai_config.api_key_required'));
+    if (searchProvider === 'vertex' && (!localVertexKey || !vertexSearchProject || !vertexSearchEngine)) return toast.error(t('ai_config.api_key_required'));
     if (searchProvider === 'serper' && !localSerperKey) return toast.error(t('ai_config.api_key_required'));
   if (searchProvider === 'yandex' && (!localYandexKey || !yandexSearchLogin)) return toast.error(t('ai_config.api_key_required'));
     setIsSearchTesting(true);
     try {
       const config = {
-         googleSearchApiKey: localGoogleKey,
-         googleSearchCx,
+         vertexSearchApiKey: localVertexKey,
+         vertexSearchProject,
+         vertexSearchEngine,
+         vertexSearchLocation,
          serperApiKey: localSerperKey,
          yandexSearchApiKey: localYandexKey,
          yandexSearchLogin
@@ -105,8 +107,7 @@ export const AIConfigPanel: React.FC = () => {
         toast.success(`${t('ai_config.connection_verified')} (${result.count} results)`);
         // Auto-save the key if validation succeeds
         setConfig({
-            googleSearchApiKey: localGoogleKey,
-            googleSearchCx,
+            vertexSearchApiKey: localVertexKey,
             serperApiKey: localSerperKey,
             yandexSearchApiKey: localYandexKey,
             yandexSearchLogin
@@ -208,14 +209,14 @@ export const AIConfigPanel: React.FC = () => {
   // Update local keys and reset manual input when provider changes or store updates
   useEffect(() => {
     setLocalKey(getDecryptedApiKey());
-    setLocalGoogleKey(getDecryptedGoogleKey());
+    setLocalVertexKey(getDecryptedVertexKey());
     setLocalSerperKey(getDecryptedSerperKey());
     setLocalYandexKey(getDecryptedYandexKey());
     setLocalOmdbKey(getDecryptedOmdbKey());
     setLocalTmdbKey(getDecryptedTmdbKey());
     setLocalBangumiToken(getDecryptedBangumiToken());
     setIsManualInput(false);
-  }, [provider, getDecryptedApiKey, getDecryptedGoogleKey, getDecryptedSerperKey, getDecryptedYandexKey, getDecryptedOmdbKey, getDecryptedTmdbKey, getDecryptedBangumiToken, enableTmdb, enableBangumi]);
+  }, [provider, getDecryptedApiKey, getDecryptedVertexKey, getDecryptedSerperKey, getDecryptedYandexKey, getDecryptedOmdbKey, getDecryptedTmdbKey, getDecryptedBangumiToken, enableTmdb, enableBangumi]);
 
   const handleTestConnection = async () => {
     setIsTesting(true);
@@ -247,8 +248,7 @@ export const AIConfigPanel: React.FC = () => {
           maxTokens,
           enableSearch,
           searchProvider,
-          googleSearchApiKey: localGoogleKey,
-          googleSearchCx,
+          vertexSearchApiKey: localVertexKey,
           serperApiKey: localSerperKey,
           yandexSearchApiKey: localYandexKey,
           yandexSearchLogin,
@@ -490,6 +490,32 @@ export const AIConfigPanel: React.FC = () => {
                 </div>
 
                 <div className="flex items-center justify-between">
+                    <span className="text-sm text-theme-text">{t('ai_config.search_reasoning_label')}</span>
+                    <select
+                        value={searchReasoning}
+                        onChange={(e) => setConfig({ searchReasoning: e.target.value as ReasoningLevel })}
+                        className="w-32 px-2 py-1 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none text-sm"
+                    >
+                        {reasoningOptions.map(l => (
+                            <option key={l} value={l}>{t(`ai_config.reasoning_${l}`)}</option>
+                        ))}
+                    </select>
+                </div>
+
+                <div className="flex items-center justify-between">
+                    <span className="text-sm text-theme-text">{t('ai_config.distill_reasoning_label')}</span>
+                    <select
+                        value={distillReasoning}
+                        onChange={(e) => setConfig({ distillReasoning: e.target.value as ReasoningLevel })}
+                        className="w-32 px-2 py-1 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none text-sm"
+                    >
+                        {reasoningOptions.map(l => (
+                            <option key={l} value={l}>{t(`ai_config.reasoning_${l}`)}</option>
+                        ))}
+                    </select>
+                </div>
+
+                <div className="flex items-center justify-between">
                     <span className="text-sm text-theme-text">{t('ai_config.enable_trending')}</span>
                     <label className="relative inline-flex items-center cursor-pointer">
                         <input
@@ -617,6 +643,8 @@ export const AIConfigPanel: React.FC = () => {
             </label>
         </div>
 
+        <p className="text-xs text-theme-subtext/80 mb-3">{t('ai_config.force_web_search_hint')}</p>
+
         {enableSearch && (
           <div className="bg-theme-bg/50 p-3 rounded-lg border border-theme-border space-y-3">
                 {/* Search Provider Selection */}
@@ -636,46 +664,68 @@ export const AIConfigPanel: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Google Configuration */}
-                {searchProvider === 'google' && (
+                {/* Vertex AI Search Configuration */}
+                {searchProvider === 'vertex' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.google_key_label')}</label>
+                            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.vertex_key_label')}</label>
                             <div className="relative">
-                                <input 
-                                    type={showGoogleKey ? "text" : "password"} 
-                                    value={localGoogleKey}
-                                    onChange={(e) => setLocalGoogleKey(e.target.value)}
+                                <input
+                                    type={showVertexKey ? "text" : "password"}
+                                    value={localVertexKey}
+                                    onChange={(e) => setLocalVertexKey(e.target.value)}
                                     className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                     placeholder="AIza..."
                                 />
-                                 <button 
+                                 <button
                                     type="button"
-                                    onClick={() => setShowGoogleKey(!showGoogleKey)}
+                                    onClick={() => setShowVertexKey(!showVertexKey)}
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-subtext hover:text-theme-text"
                                   >
-                                    {showGoogleKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    {showVertexKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                   </button>
                             </div>
                             <p className="text-xs text-theme-subtext/70 italic mt-1">
                                 {t('ai_config.multi_key_hint')}
                             </p>
-                             <a href="https://developers.google.com/custom-search/v1/overview" target="_blank" rel="noreferrer" className="text-xs text-theme-accent hover:underline mt-1 inline-block">
-                                {t('ai_config.get_google_key')}
+                             <a href="https://docs.cloud.google.com/generative-ai-app-builder/docs/preview-search-results" target="_blank" rel="noreferrer" className="text-xs text-theme-accent hover:underline mt-1 inline-block">
+                                {t('ai_config.get_vertex_key')}
                             </a>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.google_cx_label')}</label>
-                            <input 
-                                type="text" 
-                                value={googleSearchCx}
-                                onChange={(e) => setConfig({ googleSearchCx: e.target.value })}
+                            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.vertex_project_label')}</label>
+                            <input
+                                type="text"
+                                value={vertexSearchProject}
+                                onChange={(e) => setConfig({ vertexSearchProject: e.target.value })}
                                 className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                                placeholder="0123456789..."
+                                placeholder="my-gcp-project"
                             />
-                            <a href="https://programmablesearchengine.google.com/controlpanel/all" target="_blank" rel="noreferrer" className="text-xs text-theme-accent hover:underline mt-1 inline-block">
-                                {t('ai_config.get_google_cx')}
-                            </a>
+                            <p className="text-xs text-theme-subtext/70 italic mt-1">
+                                {t('ai_config.vertex_info')}
+                            </p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.vertex_engine_label')}</label>
+                            <input
+                                type="text"
+                                value={vertexSearchEngine}
+                                onChange={(e) => setConfig({ vertexSearchEngine: e.target.value })}
+                                className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                placeholder="my-search-app"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.vertex_location_label')}</label>
+                            <select
+                                value={vertexSearchLocation || 'global'}
+                                onChange={(e) => setConfig({ vertexSearchLocation: e.target.value })}
+                                className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                            >
+                                <option value="global">global</option>
+                                <option value="eu">eu</option>
+                                <option value="us">us</option>
+                            </select>
                         </div>
                         <div className="md:col-span-2 flex justify-end">
                             <button onClick={handleTestSearch} disabled={isSearchTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50">

@@ -50,7 +50,7 @@ export const PROVIDER_DEFAULTS: Record<string, ProviderDefaults> = {
   qwen: { nativeSearch: false, reasoningLevels: ['off', 'auto', 'high'], maxTokensParam: 'max_tokens' },
   google: { nativeSearch: false, reasoningLevels: ['off', 'auto'], maxTokensParam: 'max_tokens' },
   mistral: { nativeSearch: false, reasoningLevels: ['off', 'auto'], maxTokensParam: 'max_tokens' },
-  mimo: { nativeSearch: false, reasoningLevels: ['off', 'auto'], maxTokensParam: 'max_tokens' },
+  mimo: { nativeSearch: false, reasoningLevels: ['off', 'low', 'medium', 'high', 'auto'], maxTokensParam: 'max_tokens' },
   zhipu: { nativeSearch: true, reasoningLevels: ['off', 'auto', 'high', 'max'], maxTokensParam: 'max_tokens' },
   custom: { nativeSearch: false, reasoningLevels: ['off', 'auto'], maxTokensParam: 'max_tokens' },
 };
@@ -77,13 +77,12 @@ export const MODEL_CATALOG: Record<AIProvider, CatalogModel[]> = {
     { name: 'gpt-5.5-pro', version: 'GPT-5.5 Pro', releaseDate: '2026-07' }
   ],
   deepseek: [
-    // DeepSeek V4 thinking is always on; effort accepts "high"/"max" (low/medium map to high).
-    // V4.1-Flash (2026-09) is the smallest model of the new architecture; until V4.1 Pro
-    // ships, `deepseek-v4-pro` requests are routed to V4.1-Flash at the lower Flash price.
-    { name: 'deepseek-v4.1-flash', version: 'DeepSeek V4.1 Flash', releaseDate: '2026-09', reasoningLevels: ['off', 'auto', 'high', 'max'] },
-    { name: 'deepseek-v4-pro', version: 'DeepSeek V4 Pro', releaseDate: '2026-04', reasoningLevels: ['off', 'auto', 'high', 'max'] },
-    { name: 'deepseek-v4-flash', version: 'DeepSeek V4 Flash', releaseDate: '2026-04', reasoningLevels: ['off', 'auto', 'high', 'max'] },
-    { name: 'deepseek-v3-2', version: 'DeepSeek V3.2', releaseDate: '2025-12', reasoningLevels: ['off', 'auto'] }
+    // DeepSeek V4 thinking is on by default; reasoning_effort accepts 'none'
+    // (verified against the live API — fully disables thinking), 'high', 'max'.
+    // The published chat models are deepseek-flash and deepseek-v4-pro; the
+    // older v4.1-flash / v4-flash / v3-2 ids were retired by the provider.
+    { name: 'deepseek-flash', version: 'DeepSeek Flash', releaseDate: '2026-09', reasoningLevels: ['off', 'auto', 'high', 'max'] },
+    { name: 'deepseek-v4-pro', version: 'DeepSeek V4 Pro', releaseDate: '2026-04', reasoningLevels: ['off', 'auto', 'high', 'max'] }
   ],
   qwen: [
     // Chat Completions native search (enable_search) is documented for qwen3.7-plus/flash only.
@@ -113,6 +112,8 @@ export const MODEL_CATALOG: Record<AIProvider, CatalogModel[]> = {
   ],
   mimo: [
     // MiMo V2.6 series (2026-09-21) replaces V2.5, which is officially sunset 2026-10-21.
+    // Thinking is controlled via thinking.type=disabled (off) or reasoning_effort
+    // none/low/medium/high (verified against the live API).
     { name: 'mimo-v2.6-pro', version: 'MiMo V2.6 Pro', releaseDate: '2026-09' },
     { name: 'mimo-v2.6-flash', version: 'MiMo V2.6 Flash', releaseDate: '2026-09' },
     { name: 'mimo-v2.5-pro', version: 'MiMo V2.5 Pro (Sunset 2026-10-21)', releaseDate: '2026-05', deprecated: true },
@@ -188,15 +189,20 @@ export function buildRequestExtras(opts: {
 
   const level = caps.reasoningLevels.includes(reasoningEffort) ? reasoningEffort : 'auto';
   if (level !== 'auto') {
-    if (level === 'off') {
+  if (level === 'off') {
       if (provider === 'qwen') {
         out.enable_thinking = false;
       } else if (provider === 'moonshot' && caps.reasoningLevels.includes('off')) {
         out.enable_thinking = false;
-      } else if (provider === 'zhipu') {
+      } else if (provider === 'zhipu' || provider === 'mimo') {
+        // Verified against the live API: both accept thinking.type=disabled.
         out.thinking = { type: 'disabled' };
+      } else if (provider === 'deepseek') {
+        // Verified against the live API: reasoning_effort 'none' fully
+        // disables V4 thinking.
+        out.reasoning_effort = 'none';
       }
-      // OpenAI/DeepSeek/Gemini/Mistral/MiMo: "off" means leave the provider default.
+      // OpenAI/Gemini/Mistral: "off" means leave the provider default.
     } else {
       switch (provider) {
         case 'openai':
@@ -204,6 +210,10 @@ export function buildRequestExtras(opts: {
           break;
         case 'deepseek':
           out.reasoning_effort = level === 'max' ? 'max' : 'high';
+          break;
+        case 'mimo':
+          // mimo exposes reasoning_effort = none/low/medium/high (no 'max').
+          out.reasoning_effort = level === 'max' ? 'high' : level;
           break;
         case 'moonshot':
           if (caps.reasoningLevels.includes('max') && level === 'max') {

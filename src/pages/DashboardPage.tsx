@@ -382,7 +382,7 @@ export const DashboardPage: React.FC = () => {
                         if (k === 'duckduckgo') return 'DuckDuckGo';
                         if (k === 'serper') return 'Serper';
                         if (k === 'yandex') return 'Yandex';
-                        if (k === 'google') return 'Google';
+                        if (k === 'vertex' || k === 'google') return 'Vertex AI Search';
                         if (k === 'plugin') return t('dashboard.search_diag_plugin');
                         return p;
                       })

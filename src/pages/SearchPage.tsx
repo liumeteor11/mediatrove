@@ -68,8 +68,30 @@ export const SearchPage: React.FC = () => {
     return score;
   };
 
-  const sortByRelevance = (items: MediaItem[], q: string) => {
-    return [...items].sort((a, b) => getRelevanceScore(b, q) - getRelevanceScore(a, q));
+  // Parses "YYYY", "YYYY-MM", "YYYY-MM-DD" (also 2026年7月15日 / 2026/7/5)
+  // into a comparable timestamp. Year-only counts as the end of that year;
+  // items without any usable date return 0 and sort last.
+  const getReleaseTimestamp = (item: MediaItem): number => {
+    const m = (item.releaseDate || '').trim().match(/(\d{4})(?:[-\/.年]\s*(\d{1,2}))?(?:[-\/.月]\s*(\d{1,2}))?/);
+    // Years below 1000 (e.g. Bangumi's "0000-00-00" for unaired seasons) are
+    // placeholder data, not real dates — treat them as missing.
+    if (!m || Number(m[1]) < 1000) return 0;
+    const y = Number(m[1]);
+    const mo = m[2] ? Number(m[2]) : 12;
+    const d = m[3] ? Number(m[3]) : new Date(y, mo, 0).getDate();
+    const ts = new Date(y, mo - 1, d).getTime();
+    return Number.isFinite(ts) ? ts : 0;
+  };
+
+  // Search results are ordered newest first; relevance only breaks ties among
+  // same-date items, and undated items go to the bottom (relevance-ordered).
+  const sortByNewestFirst = (items: MediaItem[], q: string) => {
+    return [...items].sort((a, b) => {
+      const ta = getReleaseTimestamp(a);
+      const tb = getReleaseTimestamp(b);
+      if (ta !== tb) return tb - ta;
+      return getRelevanceScore(b, q) - getRelevanceScore(a, q);
+    });
   };
 
   const cancelOps = () => {
@@ -258,7 +280,7 @@ export const SearchPage: React.FC = () => {
       
       if (!isOpActive(opId)) return;
       const duration = Math.round(performance.now() - startTs);
-      const sorted = sortByRelevance(data, q);
+      const sorted = sortByNewestFirst(data, q);
       setResults(sorted);
       writeSearchCache(q, selectedType, sorted);
       useAIStore.getState().setConfig({ lastSearchDurationMs: duration, lastSearchAt: new Date().toISOString(), lastSearchQuery: q });
@@ -366,7 +388,7 @@ export const SearchPage: React.FC = () => {
           return next;
       });
 
-      const sorted = sortByRelevance(mapped, q);
+      const sorted = sortByNewestFirst(mapped, q);
       setResults(prev => {
         if (!isOpActive(opId)) return prev;
         return sorted;

@@ -34,11 +34,16 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
   initialize: async () => {
     if (get().initialized) return;
     set({ isLoading: true });
+    // Legacy items may carry the built-in placeholder SVG as a "cached" poster.
+    // Stripping it on load (no import of aiService — the SVG carries a
+    // data-placeholder marker) makes backfill/repair treat them as posterless.
+    const stripLegacyPlaceholders = (items: MediaItem[]): MediaItem[] =>
+        items.map((it) => (it.posterUrl && it.posterUrl.includes('mediatrove-placeholder')) ? { ...it, posterUrl: undefined } : it);
     try {
         if (isTauri) {
             const username = useAuthStore.getState().user?.username || 'guest';
             const items = await invoke<MediaItem[]>('get_collection', { username });
-            set({ collection: items, initialized: true, isLoading: false });
+            set({ collection: stripLegacyPlaceholders(items), initialized: true, isLoading: false });
         } else {
             // Fallback to localStorage for Web Mode
             const saved = localStorage.getItem('media-tracker-collection');
@@ -47,7 +52,7 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
                     const parsed = JSON.parse(saved);
                     // Handle zustand persist structure { state: { collection: [...] }, version: 0 }
                     if (parsed.state && Array.isArray(parsed.state.collection)) {
-                        set({ collection: parsed.state.collection, initialized: true, isLoading: false });
+                        set({ collection: stripLegacyPlaceholders(parsed.state.collection), initialized: true, isLoading: false });
                     } else {
                          set({ collection: [], initialized: true, isLoading: false });
                     }

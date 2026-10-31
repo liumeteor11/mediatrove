@@ -20,3 +20,6 @@ src-tauri/.tauri/
 
 # Local collection exports (personal library data)
 /media-collection-*.json
+
+# ZCode local workspace (session data — never commit)
+.zcode/

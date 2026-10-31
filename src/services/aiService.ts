@@ -9,7 +9,7 @@ import { useAIStore } from "../store/useAIStore";
 import { useCollectionStore } from "../store/useCollectionStore";
 import i18n from '../i18n';
 import type { AIProvider, TrendingMode } from '../store/useAIStore';
-import { buildRequestExtras, getModelCapabilities, getNativeSearchTools } from './modelCatalog';
+import { buildRequestExtras, getModelCapabilities, getNativeSearchTools, ReasoningLevel } from './modelCatalog';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from 'react-toastify';
 
@@ -25,7 +25,7 @@ const showQuotaError = (msg: string) => {
     if (msg.includes("Quota Exceeded") || msg.includes("429")) {
         const now = Date.now();
         if (now - lastQuotaErrorTs > 60000) {
-            toast.error(i18n.t('ai_config.search_quota_exceeded', { defaultValue: "Google Search Quota Exceeded. Please check your API key billing/quota." }));
+            toast.error(i18n.t('ai_config.search_quota_exceeded', { defaultValue: "Search quota exceeded (429). Please check the current search engine key billing/quota." }));
             lastQuotaErrorTs = now;
         }
     }
@@ -39,7 +39,7 @@ const isTauriEnv = typeof window !== 'undefined' && (
   ))
 );
 
-type TauriSearchProvider = 'google' | 'serper' | 'yandex' | 'duckduckgo';
+type TauriSearchProvider = 'vertex' | 'serper' | 'yandex' | 'duckduckgo';
 
 const isUnsupportedParamError = (e: any): boolean => {
     const status = e?.status ?? e?.response?.status;
@@ -51,17 +51,20 @@ const isUnsupportedParamError = (e: any): boolean => {
 
 const normalizeTauriSearchProvider = (sp: any): TauriSearchProvider => {
   const v = String(sp || '').toLowerCase();
-  return (v === 'google' || v === 'serper' || v === 'yandex') ? (v as any) : 'duckduckgo';
+  if (v === 'google') return 'vertex'; // legacy: Custom Search → Vertex AI Search
+  return (v === 'vertex' || v === 'serper' || v === 'yandex') ? (v as any) : 'duckduckgo';
 };
 
 const resolveTauriSearchProviderList = (input: {
   provider: any;
-  googleKey?: string;
-  googleCx?: string;
+  vertexKey?: string;
+  vertexProject?: string;
+  vertexEngine?: string;
+  vertexLocation?: string;
   serperKey?: string;
   yandexKey?: string;
   yandexUser?: string;
-}): Array<{ provider: TauriSearchProvider; apiKey?: string; cx?: string; user?: string }> => {
+}): Array<{ provider: TauriSearchProvider; apiKey?: string; project?: string; engine?: string; location?: string; user?: string }> => {
   const clean = (v?: string): string | undefined => {
     const s = (v ?? '').trim();
     if (!s) return undefined;
@@ -71,28 +74,30 @@ const resolveTauriSearchProviderList = (input: {
   };
 
   const requested = normalizeTauriSearchProvider(input.provider);
-  const googleKey = clean(input.googleKey);
-  const googleCx = clean(input.googleCx);
+  const vertexKey = clean(input.vertexKey);
+  const vertexProject = clean(input.vertexProject);
+  const vertexEngine = clean(input.vertexEngine);
+  const vertexLocation = clean(input.vertexLocation);
   const serperKey = clean(input.serperKey);
   const yandexKey = clean(input.yandexKey);
   const yandexUser = clean(input.yandexUser);
 
   // The user's selected engine always goes first; the remaining configured
-  // engines follow as fallbacks (Google before Serper/Yandex), with keyless
+  // engines follow as fallbacks (Vertex before Serper/Yandex), with keyless
   // DuckDuckGo always last.
-  const candidates: TauriSearchProvider[] = [requested, 'google', 'serper', 'yandex', 'duckduckgo'];
+  const candidates: TauriSearchProvider[] = [requested, 'vertex', 'serper', 'yandex', 'duckduckgo'];
   const uniq = Array.from(new Set(candidates));
 
-  const out: Array<{ provider: TauriSearchProvider; apiKey?: string; cx?: string; user?: string }> = [];
-  
+  const out: Array<{ provider: TauriSearchProvider; apiKey?: string; project?: string; engine?: string; location?: string; user?: string }> = [];
+
   // Helper to split keys
   const splitKeys = (k?: string) => (k || '').split(/[;；]/).map(x => x.trim()).filter(x => x);
 
   for (const p of uniq) {
-    if (p === 'google') {
-      if (googleKey && googleCx) {
-         const keys = splitKeys(googleKey);
-         keys.forEach(k => out.push({ provider: 'google', apiKey: k, cx: googleCx }));
+    if (p === 'vertex') {
+      if (vertexKey && vertexProject && vertexEngine) {
+         const keys = splitKeys(vertexKey);
+         keys.forEach(k => out.push({ provider: 'vertex', apiKey: k, project: vertexProject, engine: vertexEngine, location: vertexLocation || 'global' }));
       }
       continue;
     }
@@ -176,10 +181,6 @@ const OMDB_API_KEY = import.meta.env.VITE_OMDB_API_KEY;
 const FALLBACK_POSTER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900" data-placeholder="mediatrove-placeholder"><rect width="600" height="900" fill="#1a1a1a"/></svg>';
 export const FALLBACK_POSTER = `data:image/svg+xml;utf8,${encodeURIComponent(FALLBACK_POSTER_SVG)}`;
 
-const getPlaceholder = (type: string = 'Media') => {
-  return FALLBACK_POSTER;
-};
-
 const normalizeImageUrl = (value: any): string | undefined => {
   let s = String(value ?? '').trim();
   if (!s) return undefined;
@@ -192,7 +193,9 @@ const normalizeImageUrl = (value: any): string | undefined => {
   if (lower === 'n/a' || lower === 'na' || lower === 'null' || lower === 'undefined') return undefined;
   if (lower.startsWith('x-raw-image')) return undefined;
   if (lower.includes('moviepostersgallery.com/wp-content/uploads/2020/08/movie-posters-gallery_social.jpg')) return undefined;
-  if (lower.includes('m.media-amazon.com/')) return undefined;
+  // NOTE: m.media-amazon.com is NOT blocked here — OMDb API posters are
+  // hosted there. Engine-search amazon junk is filtered separately in
+  // pickFromResults and the trending prefetch.
   if (lower.includes('i.ebayimg.com/') || lower.includes('ebayimg.com/')) return undefined;
   if (lower.startsWith('data:') || lower.startsWith('blob:')) return s;
   if (lower.startsWith('http://') || lower.startsWith('https://')) return s;
@@ -210,8 +213,7 @@ export const isPlaceholderPosterUrl = (value?: string): boolean => {
   if (lower.includes('moviepostersgallery.com/wp-content/uploads/2020/08/movie-posters-gallery_social.jpg')) return true;
   if (lower.includes('placehold.co') || lower.includes('no+image') || lower.includes('image+error')) return true;
   if (lower.includes('mediatrove-placeholder')) return true;
-  if (lower.includes('m.media-amazon.com/')) return true;
-  if (lower.includes('i.ebayimg.com/') || lower.includes('ebayimg.com/')) return true;
+  if (lower.includes('i.ebayimg.com/') || lower.includes('ebayimg.com')) return true;
   return false;
 };
 
@@ -220,6 +222,8 @@ const isBlockedPosterUrl = (value?: string): boolean => {
 };
 
 const FRANCHISE_ALIASES: Record<string, string[]> = {
+  '辛普森一家': ['辛普森一家', 'The Simpsons'],
+  'The Simpsons': ['辛普森一家'],
   '疯狂动物城': ['动物方城市', 'Zootopia', 'Zootropolis'],
   'Zootopia': ['疯狂动物城', 'Zootropolis'],
   'Zootropolis': ['Zootopia', '疯狂动物城'],
@@ -357,6 +361,75 @@ const fetchPosterFromOMDB = async (title: string, year: string): Promise<string 
   return undefined;
 };
 
+// API-direct poster lookup: the TMDB search endpoint returns a structured
+// poster_path for the matched movie/series — far higher confidence than
+// scoring engine results. Books/comics/music have no TMDB entry, so those
+// types skip it.
+const fetchPosterFromTMDB = async (title: string, year: string, type: string): Promise<string | undefined> => {
+    const t = String(type || '').toLowerCase();
+    const kind: 'movie' | 'tv' | null =
+        /tv|series|drama|剧集|电视剧|番剧|剧/.test(t) ? 'tv'
+        : /movie|film|电影/.test(t) ? 'movie'
+        : null;
+    if (!kind) return undefined;
+    try {
+        const results = await searchTMDB(title, kind);
+        if (!Array.isArray(results) || results.length === 0) return undefined;
+        const yNum = /^\d{4}$/.test(String(year || '')) ? parseInt(String(year), 10) : null;
+        let best: any = undefined;
+        if (yNum !== null) {
+            // Release year within ±1 (streaming dates often shift by a year).
+            best = results.find((r: any) => {
+                const d = String(r.release_date || r.first_air_date || '');
+                const cy = parseInt(d.slice(0, 4), 10);
+                return !isNaN(cy) && Math.abs(cy - yNum) <= 1;
+            });
+        }
+        if (!best) {
+            const normKey = (v: any) => String(v || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+            const qn = normKey(title);
+            best = results.find((r: any) => normKey(r.title || r.name) === qn) || results[0];
+        }
+        const url = getTMDBPosterUrl(best?.poster_path || null, 'w500');
+        if (url && await checkImage(url)) return url;
+    } catch {}
+    return undefined;
+};
+
+// Poster APIs (OMDb in particular) are English-first databases: a Chinese
+// title that missed every source gets one retry with the English title.
+// Resolution order: curated franchise aliases (offline, instant) → a tiny AI
+// translation. Cached per session; latin titles never enter the retry.
+const titleTranslationCache = new Map<string, string>();
+
+const translateTitleToEnglish = async (title: string): Promise<string | undefined> => {
+    const t = String(title || '').trim();
+    if (!t || !/[\u4e00-\u9fff]/.test(t)) return undefined;
+    const cached = titleTranslationCache.get(t);
+    if (cached) return cached;
+    const aliases = FRANCHISE_ALIASES[t] || [];
+    const alias = aliases.find(a => /[a-z]/i.test(a) && !/[\u4e00-\u9fff]/.test(a));
+    if (alias) {
+        titleTranslationCache.set(t, alias);
+        return alias;
+    }
+    try {
+        const text = await callAI([
+            { role: 'system', content: 'You translate media titles. Reply with the official English title only - no quotes, no explanation, no extra words.' },
+            { role: 'user', content: `Give the official English title of this media work: ${t}` }
+        ], 0, { disableSearch: true, maxTokens: 200 });
+        const en = String(text || '')
+            .split('\n')[0].trim()
+            .replace(/^["'「『]+|["'」』]+$/g, '')
+            .trim();
+        if (en && en.length <= 120 && !/[\u4e00-\u9fff]/.test(en)) {
+            titleTranslationCache.set(t, en);
+            return en;
+        }
+    } catch {}
+    return undefined;
+};
+
 const isSafeContent = (_text: string): boolean => true;
 
 export const performClientSideSearch = async (
@@ -367,8 +440,10 @@ export const performClientSideSearch = async (
     const {
         enableSearch,
         searchProvider,
-        getDecryptedGoogleKey,
-        googleSearchCx,
+        getDecryptedVertexKey,
+        vertexSearchProject,
+        vertexSearchEngine,
+        vertexSearchLocation,
         getDecryptedSerperKey,
         getDecryptedYandexKey,
         yandexSearchLogin
@@ -377,12 +452,12 @@ export const performClientSideSearch = async (
     if (!enableSearch && !force) return "";
 
     // Web mode has no Rust proxy path, so engines are tried directly: the
-    // user's selected engine first, then Google, then Serper, with the keyless
+    // user's selected engine first, then Vertex, then Serper, with the keyless
     // DuckDuckGo block below as the last resort.
-    const googleReady = !!(getDecryptedGoogleKey() || '').trim() && !!(googleSearchCx || '').trim();
+    const vertexReady = !!(getDecryptedVertexKey() || '').trim() && !!(vertexSearchProject || '').trim() && !!(vertexSearchEngine || '').trim();
     const serperReady = !!(getDecryptedSerperKey() || '').trim();
     const serperFirst = searchProvider === 'serper' && serperReady;
-    let triedGoogle = false;
+    let triedVertex = false;
     let triedSerper = false;
 
     try {
@@ -539,8 +614,10 @@ export const performClientSideSearch = async (
                 const { useSystemProxy, getProxyUrl } = useAIStore.getState();
                 const providerList = resolveTauriSearchProviderList({
                     provider: searchProvider,
-                    googleKey: getDecryptedGoogleKey(),
-                    googleCx: googleSearchCx,
+                    vertexKey: getDecryptedVertexKey(),
+                    vertexProject: vertexSearchProject,
+                    vertexEngine: vertexSearchEngine,
+                    vertexLocation: vertexSearchLocation,
                     serperKey: getDecryptedSerperKey(),
                     yandexKey: getDecryptedYandexKey(),
                     yandexUser: yandexSearchLogin
@@ -552,12 +629,14 @@ export const performClientSideSearch = async (
                 const uniq = new Map<string, any>();
                 
                 const makeRustConfig = (
-                  p: { provider: TauriSearchProvider; apiKey?: string; cx?: string; user?: string },
+                  p: { provider: TauriSearchProvider; apiKey?: string; project?: string; engine?: string; location?: string; user?: string },
                   search_type: 'text' | 'image'
                 ) => ({
                   provider: p.provider,
                   api_key: p.apiKey,
-                  cx: p.cx,
+                  project: p.project,
+                  engine: p.engine,
+                  location: p.location,
                   user: p.user,
                   search_type,
                   proxy_url: getProxyUrl(),
@@ -594,7 +673,7 @@ export const performClientSideSearch = async (
                               channel: 'search',
                               provider: rustConfig.provider,
                               query: qv,
-                              request: { config: { provider: rustConfig.provider, cx: rustConfig.cx, user: rustConfig.user, search_type: rustConfig.search_type } },
+                              request: { config: { provider: rustConfig.provider, engine: rustConfig.engine, user: rustConfig.user, search_type: rustConfig.search_type } },
                               response: { error: errStr },
                               durationMs: Math.round(performance.now() - start),
                               searchType: 'text'
@@ -616,7 +695,7 @@ export const performClientSideSearch = async (
                       channel: 'search',
                       provider: rustConfig.provider,
                       query: qv,
-                      request: { config: { provider: rustConfig.provider, cx: rustConfig.cx, user: rustConfig.user, search_type: rustConfig.search_type } },
+                      request: { config: { provider: rustConfig.provider, engine: rustConfig.engine, user: rustConfig.user, search_type: rustConfig.search_type } },
                       response: resultStr,
                       durationMs: Math.round(performance.now() - start),
                       searchType: 'text'
@@ -634,7 +713,7 @@ export const performClientSideSearch = async (
                   return [];
                 };
 
-                const tasks: Array<{ p: { provider: TauriSearchProvider; apiKey?: string; cx?: string; user?: string }, qv: string }> = [];
+                const tasks: Array<{ p: { provider: TauriSearchProvider; apiKey?: string; project?: string; engine?: string; location?: string; user?: string }, qv: string }> = [];
                 const primary = providers[0] || { provider: 'duckduckgo' as const };
                 for (const qv of ordered) tasks.push({ p: primary, qv });
                 for (const p of providers.slice(1)) {
@@ -644,7 +723,7 @@ export const performClientSideSearch = async (
 
                 const taskUniq = new Map<string, { p: any, qv: string }>();
                 for (const tsk of tasks) {
-                  const k = `${tsk.p.provider}|${tsk.p.cx || ''}|${tsk.p.user || ''}|${tsk.qv}`;
+                  const k = `${tsk.p.provider}|${tsk.p.engine || ''}|${tsk.p.user || ''}|${tsk.qv}`;
                   if (!taskUniq.has(k)) taskUniq.set(k, tsk);
                 }
 
@@ -768,7 +847,7 @@ export const performClientSideSearch = async (
                         channel: 'search',
                         provider: searchProvider,
                         query: base,
-                        request: { config: { provider: searchProvider, cx: googleSearchCx, user: yandexSearchLogin, search_type: "text" } },
+                        request: { config: { provider: searchProvider, engine: vertexSearchEngine, user: yandexSearchLogin, search_type: "text" } },
                         response: { error: (tauriError as any)?.message || String(tauriError) },
                         durationMs: undefined,
                         searchType: 'text'
@@ -779,60 +858,75 @@ export const performClientSideSearch = async (
             }
         }
         
-        // Web Mode (Limited)
-        if (googleReady && (!serperFirst || triedSerper)) {
-            const apiKeyStr = getDecryptedGoogleKey();
-            if (apiKeyStr && googleSearchCx) {
+        // Web Mode (Limited) — Vertex AI Search (Agent Search) via the API-key
+        // searchLite variant. discoveryengine may not send CORS headers to a
+        // browser, so any failure just falls through to the next engine.
+        if (vertexReady && (!serperFirst || triedSerper)) {
+            const apiKeyStr = getDecryptedVertexKey();
+            if (apiKeyStr && vertexSearchProject && vertexSearchEngine) {
             const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
-            
+
             // Try each key
             for (const apiKey of apiKeys) {
                 let keyFailed = false;
                 const topN = (effType === MediaType.MOVIE || effType === MediaType.TV_SERIES) ? 3 : 2;
                 const ordered = [...precisionQueries.slice(0, topN), ...qList];
-                
+
                 // Execute queries in parallel with semaphore
                 const queryPromises = ordered.map(async (qv) => {
                     const start = performance.now();
                     if (keyFailed) return [];
-                    const cacheKey = `google_${googleSearchCx}_${qv}`;
+                    const cacheKey = `vertex_${vertexSearchProject}_${vertexSearchEngine}_${qv}`;
                     const cached = searchCache.get(cacheKey);
-                    
+
                     if (cached && (Date.now() - cached.ts < CACHE_TTL)) {
                         return cached.data.items || [];
                     }
 
-                    const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${googleSearchCx}&q=${encodeURIComponent(qv)}&num=8&safe=off`;
-                    
+                    const host = (!vertexSearchLocation || vertexSearchLocation === 'global')
+                        ? 'discoveryengine.googleapis.com'
+                        : `${vertexSearchLocation}-discoveryengine.googleapis.com`;
+                    const url = `https://${host}/v1/projects/${encodeURIComponent(vertexSearchProject)}/locations/${encodeURIComponent(vertexSearchLocation || 'global')}/collections/default_collection/engines/${encodeURIComponent(vertexSearchEngine)}/servingConfigs/default_search:searchLite?key=${encodeURIComponent(apiKey)}`;
+
                     try {
                         await apiLimiter.acquire();
                         try {
-                            const res = await fetchWithTimeout(url, { timeoutMs: 10000 });
-                            
+                            const res = await fetchWithTimeout(url, {
+                                timeoutMs: 10000,
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ query: qv, pageSize: 8 })
+                            });
+
                             if (res.status === 429 || res.status === 400 || res.status === 403) {
-                                console.warn(`Google Search Error ${res.status}`);
+                                console.warn(`Vertex AI Search Error ${res.status}`);
                                 if (res.status === 429) showQuotaError("Quota Exceeded");
                                 keyFailed = true;
                                 return [];
                             }
-                            
+
                             if (res.ok) {
                                 const data = await res.json();
-                                searchCache.set(cacheKey, { ts: Date.now(), data });
+                                const items = (data.results || []).map((r: any) => ({
+                                    title: r?.document?.derivedStructData?.title || r?.document?.structData?.fields?.title || '',
+                                    snippet: r?.document?.derivedStructData?.snippets?.[0]?.snippet || r?.document?.derivedStructData?.extractive_answers?.[0]?.content || '',
+                                    link: r?.document?.derivedStructData?.link || r?.document?.derivedStructData?.uri || r?.document?.structData?.fields?.link || ''
+                                })).filter((it: any) => it.title || it.link);
+                                searchCache.set(cacheKey, { ts: Date.now(), data: { items } });
                                 try {
                                     useAIStore.getState().appendLog({
                                         id: uuidv4(),
                                         ts: Date.now(),
                                         channel: 'search',
-                                        provider: 'google',
+                                        provider: 'vertex',
                                         query: qv,
-                                        request: { url: `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(qv)}&num=8` },
-                                        response: (data.items || []).slice(0, 8),
+                                        request: { url: `https://${host}/v1/.../engines/${vertexSearchEngine}/servingConfigs/default_search:searchLite` },
+                                        response: items.slice(0, 8),
                                         durationMs: Math.round(performance.now() - start),
                                         searchType: 'text'
                                     });
                                 } catch {}
-                                return data.items || [];
+                                return items;
                             }
                         } finally {
                             apiLimiter.release();
@@ -844,20 +938,15 @@ export const performClientSideSearch = async (
                 const resultsArrays = await Promise.all(queryPromises);
                 if (keyFailed) continue;
 
-                let merged = resultsArrays.flat().map((item: any) => ({
-                    title: item.title,
-                    snippet: item.snippet,
-                    link: item.link,
-                    image: item.pagemap?.cse_image?.[0]?.src
-                }));
+                let merged = resultsArrays.flat();
 
                 const uniq = new Map<string, any>();
                 const filteredStep = merged.filter((it: any) => isMediaCandidate(it.title, it.snippet, it.link));
-                
+
                 for (const it of filteredStep) {
                     const pr = processSearchResult(it.title || '', it.snippet || '');
                     const key = `${pr.title}|${pr.year}`;
-                    if (!uniq.has(key)) uniq.set(key, { title: pr.title, snippet: it.snippet, link: it.link, image: it.image });
+                    if (!uniq.has(key)) uniq.set(key, { title: pr.title, snippet: it.snippet, link: it.link });
                 }
 
                 const outArray = Array.from(uniq.values());
@@ -878,11 +967,11 @@ export const performClientSideSearch = async (
                 if (final.length > 0) return JSON.stringify(final);
             } // end key loop
             }
-            triedGoogle = true;
+            triedVertex = true;
         }
 
     // Serper (Web Mode)
-    if (serperReady && (serperFirst || triedGoogle || !googleReady)) {
+    if (serperReady && (serperFirst || triedVertex || !vertexReady)) {
         const apiKeyStr = getDecryptedSerperKey();
         if (apiKeyStr) {
             const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
@@ -1075,18 +1164,21 @@ export const clearSearchCache = async (): Promise<boolean> => {
 };
 
 export const testAuthoritativeDomain = async (domain: string, sampleQuery: string = 'test'): Promise<{ ok: boolean; count: number; items: any[]; error?: string }> => {
-    const { 
+    const {
         enableSearch,
         searchProvider,
-        getDecryptedGoogleKey,
-        googleSearchCx,
+        getDecryptedVertexKey,
+        vertexSearchProject,
+        vertexSearchEngine,
+        vertexSearchLocation,
         getDecryptedSerperKey,
         getDecryptedYandexKey,
         yandexSearchLogin
     } = useAIStore.getState();
     const normalizeProvider = (sp: any): string => {
         const v = String(sp || '').toLowerCase();
-        return (v === 'google' || v === 'serper' || v === 'yandex') ? v : 'duckduckgo';
+        if (v === 'google') return 'vertex'; // legacy: Custom Search → Vertex AI Search
+        return (v === 'vertex' || v === 'serper' || v === 'yandex') ? v : 'duckduckgo';
     };
     if (!enableSearch) return { ok: false, count: 0, items: [], error: 'search_disabled' };
     const d = domain.trim().toLowerCase().replace(/^site:/,'');
@@ -1094,32 +1186,36 @@ export const testAuthoritativeDomain = async (domain: string, sampleQuery: strin
     try {
         if (isTauriEnv) {
             const { useSystemProxy, getProxyUrl } = useAIStore.getState();
-            
+
             // Use resolveTauriSearchProviderList to handle multiple keys
             const providerList = resolveTauriSearchProviderList({
                 provider: searchProvider,
-                googleKey: getDecryptedGoogleKey(),
-                googleCx: googleSearchCx,
+                vertexKey: getDecryptedVertexKey(),
+                vertexProject: vertexSearchProject,
+                vertexEngine: vertexSearchEngine,
+                vertexLocation: vertexSearchLocation,
                 serperKey: getDecryptedSerperKey(),
                 yandexKey: getDecryptedYandexKey(),
                 yandexUser: yandexSearchLogin
             });
-            
+
             let lastError = 'unknown_error';
-            
+
             // Try each provider configuration until success
             for (const eff of providerList) {
                 try {
                     const rustConfig = {
                         provider: eff.provider,
                         api_key: eff.apiKey,
-                        cx: eff.cx,
+                        project: eff.project,
+                        engine: eff.engine,
+                        location: eff.location,
                         user: eff.user,
                         search_type: 'text',
                         proxy_url: getProxyUrl(),
                         use_system_proxy: useSystemProxy
                     };
-                    
+
                     const resultStr = await invoke<string>('web_search', { query, config: rustConfig });
                     const arr = JSON.parse(resultStr);
                     const items = Array.isArray(arr) ? arr : [];
@@ -1132,53 +1228,56 @@ export const testAuthoritativeDomain = async (domain: string, sampleQuery: strin
             }
             return { ok: false, count: 0, items: [], error: lastError };
         }
-        if (searchProvider === 'google') {
-            const apiKeyStr = getDecryptedGoogleKey();
-            if (apiKeyStr && googleSearchCx) {
+        if (searchProvider === 'vertex') {
+            const apiKeyStr = getDecryptedVertexKey();
+            if (apiKeyStr && vertexSearchProject && vertexSearchEngine) {
                 const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
                 let lastError = "";
-                
+
                 for (const apiKey of apiKeys) {
-                    const cacheKey = `google_${googleSearchCx}_${query}`;
+                    const cacheKey = `vertex_${vertexSearchProject}_${vertexSearchEngine}_${query}`;
                     const cached = searchCache.get(cacheKey);
-                    let data: any = null;
-                    let status: any = 200;
+                    let items: any[] = [];
                     let fromCache = false;
 
                     if (cached && (Date.now() - cached.ts < CACHE_TTL)) {
-                        data = cached.data;
+                        items = cached.data.items || [];
                         fromCache = true;
-                        status = 'cached';
                     } else {
-                         const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${googleSearchCx}&q=${encodeURIComponent(query)}&num=4`;
+                        const host = (!vertexSearchLocation || vertexSearchLocation === 'global')
+                            ? 'discoveryengine.googleapis.com'
+                            : `${vertexSearchLocation}-discoveryengine.googleapis.com`;
+                        const url = `https://${host}/v1/projects/${encodeURIComponent(vertexSearchProject)}/locations/${encodeURIComponent(vertexSearchLocation || 'global')}/collections/default_collection/engines/${encodeURIComponent(vertexSearchEngine)}/servingConfigs/default_search:searchLite?key=${encodeURIComponent(apiKey)}`;
                         let res;
                         try {
                             await apiLimiter.acquire();
-                            res = await fetchWithTimeout(url, { timeoutMs: 12000 });
+                            res = await fetchWithTimeout(url, {
+                                timeoutMs: 12000,
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ query, pageSize: 4 })
+                            });
                         } catch(e: any) {
                             lastError = e?.message || "network_error";
                         } finally {
                             apiLimiter.release();
                         }
-                        
+
                         if (res && res.ok) {
-                            data = await res.json();
-                            searchCache.set(cacheKey, { ts: Date.now(), data });
+                            const data = await res.json();
+                            items = (data.results || []).map((r: any) => ({
+                                title: r?.document?.derivedStructData?.title || r?.document?.structData?.fields?.title || '',
+                                snippet: r?.document?.derivedStructData?.snippets?.[0]?.snippet || r?.document?.derivedStructData?.extractive_answers?.[0]?.content || '',
+                                link: r?.document?.derivedStructData?.link || r?.document?.derivedStructData?.uri || r?.document?.structData?.fields?.link || ''
+                            })).filter((it: any) => it.title || it.link);
+                            searchCache.set(cacheKey, { ts: Date.now(), data: { items } });
                         } else if (res) {
                             lastError = `HTTP ${res.status}`;
-                            if (res.status === 400 || res.status === 403 || res.status === 429) {
-                                continue;
-                            }
                             continue;
                         }
                     }
 
-                    if (data && data.items) {
-                        const items = Array.isArray(data.items) ? data.items.map((item: any) => ({
-                            title: item.title,
-                            snippet: item.snippet,
-                            link: item.link
-                        })) : [];
+                    if (!fromCache || items.length > 0) {
                         return { ok: items.length > 0, count: items.length, items };
                     }
                 }
@@ -1322,9 +1421,32 @@ const parseTemperatureRequirement = (e: any): TemperatureRequirement | null => {
     return null;
 };
 
+/**
+ * Text-form tool calls emitted by some thinking models (mimo) when the tool
+ * definitions are absent — e.g. after the search budget closes:
+ * `<tool_call><function=web_search><parameter=query>...</parameter></function></tool_call>`.
+ * Parsing them lets the app run the requested searches and feed the results
+ * back, instead of returning the raw tool-call text as the final answer.
+ */
+const parseTextToolCalls = (content: string): Array<{ name: string; query: string }> => {
+    const out: Array<{ name: string; query: string }> = [];
+    if (!content || !content.includes('<tool_call>')) return out;
+    const re = /<tool_call>\s*<function\s*=\s*([\w.:-]+)\s*>((?:[\s\S](?!<\/tool_call>))*?)<\/function>\s*<\/tool_call>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+        const name = String(m[1] || '');
+        const body = String(m[2] || '');
+        const q = body.match(/<parameter\s*=\s*query\s*>([\s\S]*?)<\/parameter>/i)
+            || body.match(/<parameter\s+name\s*=\s*"query"\s*>([\s\S]*?)<\/parameter>/i)
+            || body.match(/<parameter\s*=\s*([\w-]+)\s*>([\s\S]*?)<\/parameter>/i);
+        const query = q ? (q[2] !== undefined ? q[2] : q[1] || '').trim() : '';
+        out.push({ name, query });
+    }
+    return out;
+};
+
 /** Temperature to send: a learned/catalogued value, `undefined` when the model rejects the field. */
-const resolveTemperature = (provider: AIProvider, model: string | null | undefined, requested: number): number | undefined => {
-    const key = modelPolicyKey(provider, model);
+const resolveTemperature = (provider: AIProvider, model: string | null | undefined, requested: number): number | undefined => {    const key = modelPolicyKey(provider, model);
     if (learnedTemperaturePolicy.has(key)) {
         const learned = learnedTemperaturePolicy.get(key);
         return learned === null ? undefined : learned;
@@ -1341,6 +1463,16 @@ const isToolsUnsupportedError = (e: any): boolean => {
     const msg = String(e?.message || e?.error?.message || '');
     if (!/\b(tools|tool_choice|functions|function_calling)\b/i.test(msg)) return false;
     return /unsupported|not supported|does not support|unknown (parameter|field|argument)|invalid (parameter|field|argument)/i.test(msg);
+};
+
+/** Models that reject a named (forced) tool_choice; learned the same way as learnedNoTools. */
+const learnedNoForcedToolChoice = new Set<string>();
+
+/** True when the provider rejected the named tool_choice we force for search. */
+const isForcedToolChoiceError = (e: any): boolean => {
+    const msg = String(e?.message || e?.error?.message || '');
+    if (!/tool_choice/i.test(msg)) return false;
+    return /unsupported|not supported|does not support|invalid|unknown|not allowed|only/i.test(msg);
 };
 
 /**
@@ -1380,7 +1512,7 @@ export const canUseNativeSearch = (forceSearch: boolean = false): boolean => {
     return getModelCapabilities(s.provider, s.model).nativeSearch;
 };
 
-export const callAI = async (messages: any[], temperature: number = 0.7, options: { forceSearch?: boolean; disableSearch?: boolean; maxTokens?: number | 'auto'; configOverride?: { baseURL?: string; apiKey?: string; model?: string; provider?: AIProvider } } = {}): Promise<string> => {
+export const callAI = async (messages: any[], temperature: number = 0.7, options: { forceSearch?: boolean; disableSearch?: boolean; maxTokens?: number | 'auto'; reasoningEffort?: ReasoningLevel; configOverride?: { baseURL?: string; apiKey?: string; model?: string; provider?: AIProvider } } = {}): Promise<string> => {
     const state = useAIStore.getState();
     const { 
         provider,
@@ -1391,8 +1523,10 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
         reasoningEffort,
         maxTokens,
         searchProvider,
-        getDecryptedGoogleKey,
-        googleSearchCx,
+        getDecryptedVertexKey,
+        vertexSearchProject,
+        vertexSearchEngine,
+        vertexSearchLocation,
         getDecryptedSerperKey,
         getDecryptedYandexKey,
         yandexSearchLogin
@@ -1465,7 +1599,7 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
     }
 
     // Abstract the "completion" call
-    const createCompletion = async (msgs: any[], tools: any[], baseURLOverride?: string, apiKeyOverride?: string, extraBody?: Record<string, any>) => {
+    const createCompletion = async (msgs: any[], tools: any[], baseURLOverride?: string, apiKeyOverride?: string, extraBody?: Record<string, any>, toolChoice?: any) => {
         const effBaseURL = (baseURLOverride || finalBaseURL || '').trim();
         const effApiKey = apiKeyOverride || apiKey;
         
@@ -1479,12 +1613,13 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                 use_system_proxy: useSystemProxy
             };
             // Call Rust
-            const resultJson = await invoke<string>("ai_chat", { 
-                messages: msgs, 
-                temperature: effTemperature, 
-                tools: tools.length > 0 ? tools : undefined, 
+            const resultJson = await invoke<string>("ai_chat", {
+                messages: msgs,
+                temperature: effTemperature,
+                tools: tools.length > 0 ? tools : undefined,
+                tool_choice: toolChoice,
                 extra_body: extraBody || {},
-                config: rustConfig 
+                config: rustConfig
             });
             
             // Parse result to match OpenAI structure
@@ -1508,7 +1643,7 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                 messages: msgs,
                 temperature: effTemperature,
                 tools: tools.length > 0 ? tools : undefined,
-                tool_choice: tools.length > 0 ? "auto" : undefined,
+                tool_choice: toolChoice ?? (tools.length > 0 ? "auto" : undefined),
                 ...(extraBody || {})
             } as any);
         }
@@ -1561,6 +1696,9 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                 // Thinking models often close a search round with an empty message
                 // when they wanted to search again; ask once more, without tools.
                 let emptyAnswerNudged = false;
+                // One-shot recovery for models that emit tool calls as TEXT once
+                // the tool definitions are gone (see parseTextToolCalls).
+                let textToolRecoveryUsed = false;
                 // Truncated answers (reasoning ate the whole budget) get a bigger one.
                 let budgetRaises = 0;
                 // Providers may cap the budget themselves ("max_tokens must be <= N").
@@ -1585,6 +1723,9 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                     let webBaseURLOverride: string | undefined = undefined;
                     let switchedOffMoonshotProxy = false;
                     let effTools: any[] = externalTools;
+                    // Set for the request currently being built: true when we
+                    // force the model to call web_search via a named tool_choice.
+                    let forcedToolChoice = false;
 
                     while (attempt < MAX_RETRIES) {
                         try {
@@ -1592,14 +1733,28 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                             try {
                                  const nativeActive = useNativeSearch && !nativeSearchBlocked;
                                  effTools = (!toolsAllowed || toolsDisabled) ? [] : (nativeActive ? nativeSearchTools : externalTools);
+                                 // Force the first search round: a named tool_choice makes
+                                 // the model actually call web_search instead of skipping
+                                 // it. Native-search models search server-side already, and
+                                 // providers that reject it are remembered and fall back
+                                 // to the default "auto" behaviour.
+                                 forcedToolChoice = !learnedNoForcedToolChoice.has(modelPolicyKey(effProvider, model))
+                                     && !!options.forceSearch
+                                     && !nativeActive
+                                     && !toolsDisabled
+                                     && turnCount === 0
+                                     && effTools.some((t: any) => t?.function?.name === 'web_search');
+                                 const effToolChoice = forcedToolChoice
+                                     ? { type: 'function', function: { name: 'web_search' } }
+                                     : undefined;
                                  const extraBody = buildRequestExtras({
                                      provider: effProvider,
                                      model,
-                                     reasoningEffort,
+                                     reasoningEffort: options.reasoningEffort ?? reasoningEffort,
                                      maxTokens: effMaxTokens,
                                      nativeSearch: nativeActive
                                  });
-                                 completion = await createCompletion(currentMessages, effTools, webBaseURLOverride, currentKey, extraBody);
+                                 completion = await createCompletion(currentMessages, effTools, webBaseURLOverride, currentKey, extraBody, effToolChoice);
                             } finally {
                                 apiLimiter.release();
                             }
@@ -1621,6 +1776,14 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                             // fall back to the app's external search on the next attempt.
                             if (useNativeSearch && !nativeSearchBlocked && isUnsupportedParamError(apiError)) {
                                 nativeSearchBlocked = true;
+                                continue;
+                            }
+
+                            // A named tool_choice (forced first search round) may be
+                            // rejected by some endpoints: remember it and retry with
+                            // the default "auto" behaviour — the tools themselves stay.
+                            if (forcedToolChoice && isForcedToolChoiceError(apiError)) {
+                                learnedNoForcedToolChoice.add(modelPolicyKey(effProvider, model));
                                 continue;
                             }
 
@@ -1763,7 +1926,50 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                         if (turnCount >= MAX_SEARCH_ROUNDS) toolsDisabled = true;
                     } else {
                         // Final response
-                        const content = message.content || "";
+                        let content = message.content || "";
+
+                        // mimo-style thinking models keep emitting tool calls as TEXT
+                        // once the tool definitions are gone (search budget spent).
+                        // Parse them, run the searches once, and let the model answer
+                        // with the results in hand instead of returning tool-call text.
+                        const textCalls = content ? parseTextToolCalls(content).filter(c => /web_search$/i.test(c.name) && c.query) : [];
+                        if (textCalls.length > 0 && !textToolRecoveryUsed) {
+                            textToolRecoveryUsed = true;
+                            currentMessages.push(message);
+                            const parts: string[] = [];
+                            const seenQueries = new Set<string>();
+                            for (const c of textCalls.slice(0, 3)) {
+                                if (seenQueries.has(c.query)) continue;
+                                seenQueries.add(c.query);
+                                let r = "";
+                                try { r = await performClientSideSearch(c.query, !!options.forceSearch); } catch {}
+                                parts.push(`[web_search "${c.query}"]\n${r || "No relevant search results found."}`);
+                            }
+                            currentMessages.push({
+                                role: "user",
+                                content: `Search results for your requested tool calls:\n\n${parts.join("\n\n")}\n\nThe web_search tool is no longer available. Using the results above (and your internal knowledge if needed), output the final answer now in the requested format. Do NOT emit any tool calls.`
+                            });
+                            continue;
+                        }
+                        if (textCalls.length > 0) {
+                            // Recovery already used and the model still emits tool-call
+                            // text: strip it and accept the remainder as the answer, or
+                            // force one plain final answer when nothing remains.
+                            const stripped = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim();
+                            if (stripped) {
+                                content = stripped;
+                            } else if (!emptyAnswerNudged) {
+                                emptyAnswerNudged = true;
+                                toolsDisabled = true;
+                                currentMessages.push(message);
+                                currentMessages.push({
+                                    role: "user",
+                                    content: "Output the final answer now, in the format requested above. Do NOT emit any tool calls."
+                                });
+                                continue;
+                            }
+                        }
+
                         if (content) return content;
 
                         // Truncated before any output: thinking models can burn the
@@ -2335,16 +2541,64 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   };
   const baseScores = Array.from(baseUnique.values()).map(it => relevanceScore(it.title));
   const hasExactBaseMatch = baseScores.some(s => s === 100);
+  // Seasonal works (TV series etc.): detect via the type filter, season/episode
+  // wording in the query, or a strong TV hit in the base results. These always
+  // consult the AI so the newest season gets surfaced even on an exact match.
+  const baseUniqueItems = Array.from(baseUnique.values());
+  const isSeriesTarget = type === MediaType.TV_SERIES
+      || /第\s*[0-9一二三四五六七八九十]+\s*季|最新一?季|季播|番剧|分季/.test(q)
+      || /\bseason\s*\d+\b|\bnew season\b|\bs\d{1,2}\s?e\d{1,2}\b|latest episode/i.test(q)
+      || baseUniqueItems.some(it => it.type === MediaType.TV_SERIES && relevanceScore(it.title) >= 70);
   // Consult the AI unless we already have the exact work, or several
   // title-relevant hits (previously any 8+ results suppressed the AI call,
   // which let fuzzy matches bury the real one).
-  const shouldUseAI = !hasExactBaseMatch && !(baseScores.filter(s => s >= 90).length >= 4);
+  const shouldUseAI = isSeriesTarget || (!hasExactBaseMatch && !(baseScores.filter(s => s >= 90).length >= 4));
 
   let searchContext = "";
-  // The AI call below forces search, so when the model can search natively the
-  // engine-API context is redundant — let the model's built-in search do it.
-  const useSearchContext = shouldUseAI && baseUnique.size < 4 && !canUseNativeSearch(true);
-  if (useSearchContext) {
+  // Forced web grounding: unless the model can search natively (server-side),
+  // always pre-fetch engine results — the user's configured engine first, with
+  // the keyless built-in DuckDuckGo as fallback — so the prompt carries real
+  // web data even when the model skips the web_search tool.
+  const useSearchContext = shouldUseAI && !canUseNativeSearch(true);
+  if (useSearchContext && isSeriesTarget) {
+      // Seasonal work: also search for the latest episode/season and merge it in
+      // — a plain title query usually surfaces only the show itself or older
+      // seasons. The season results lead the context so the model sees them first.
+      const seasonQuery = isChinese ? `${q} 最新一季 播出时间 更新集数` : `${q} latest season episodes`;
+      // Latest-season info for non-Chinese shows lives mostly in English
+      // sources (e.g. "The Simpsons season 38"): also query the curated
+      // English alias when one exists.
+      // The user's query may carry modifiers ("辛普森一家 最新季"), so match
+      // the alias table by containment instead of an exact key lookup.
+      const aliasKey = Object.keys(FRANCHISE_ALIASES).find(k => k && q.includes(k));
+      const enAlias = aliasKey
+          ? (FRANCHISE_ALIASES[aliasKey] || []).find(a => /[a-z]/i.test(a) && !/[一-鿿]/.test(a))
+          : undefined;
+      const searchProviderName = String(useAIStore.getState().searchProvider || 'search');
+      const ctxTasks: Array<Promise<string>> = [
+          timed('网页搜索上下文', searchProviderName,
+              async () => await performClientSideSearch(q, true, type), ""),
+          timed('最新季搜索', searchProviderName,
+              async () => await performClientSideSearch(seasonQuery, true, MediaType.TV_SERIES), "")
+      ];
+      if (enAlias && enAlias.toLowerCase() !== q.toLowerCase()) {
+          ctxTasks.push(timed('英文最新季搜索', searchProviderName,
+              async () => await performClientSideSearch(`${enAlias} latest season episodes`, true, MediaType.TV_SERIES), ""));
+      }
+      const ctxArr = await Promise.all(ctxTasks);
+      const parseCtx = (s: string): any[] => { try { const arr = JSON.parse(s); return Array.isArray(arr) ? arr : []; } catch { return []; } };
+      const seenCtx = new Set<string>();
+      const mergedCtx: any[] = [];
+      // Season results lead, English results second, base results last.
+      const orderedCtx = ctxArr.length >= 3 ? [ctxArr[2], ctxArr[1], ctxArr[0]] : [ctxArr[1], ctxArr[0]];
+      for (const it of orderedCtx.flatMap(parseCtx)) {
+          const key = `${String(it?.title || '').toLowerCase()}|${String(it?.link || '')}`;
+          if (seenCtx.has(key)) continue;
+          seenCtx.add(key);
+          mergedCtx.push(it);
+      }
+      searchContext = mergedCtx.length > 0 ? JSON.stringify(mergedCtx.slice(0, 12)) : "";
+  } else if (useSearchContext) {
       searchContext = await timed(
         '网页搜索上下文',
         String(useAIStore.getState().searchProvider || 'search'),
@@ -2390,7 +2644,12 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
               }
               userPrompt += `\n[限制] 仅返回作品（小说、电影、电视剧、短剧、漫画、音乐专辑）。严禁返回新闻、产品评测、对比、参数、价格、手机/电子产品相关条目。`;
               userPrompt += `\n[系列] 若查询为系列作品（如第一部/第二部/续集），请分别返回各部作品，并给出准确年份。`;
-              userPrompt += `\n[优先] 使用联网搜索工具 (web_search) 获取最新信息；如网络不可用或搜索无结果，请基于已有知识返回有效 JSON：\n${searchContext}\n请尽力补全缺失的元数据（导演、主演、简介（尽量详细，不少于50字）、上映日期）。若无法确认具体日期，可返回年份。`;
+              userPrompt += `\n[最新季] 若目标作品为电视剧/番剧/短剧等分季作品，**必须**检索其最新一季：搜索关键词需同时尝试中文与英文（如"${q} 最新一季"及英文名+season N），并优先采用搜索结果中最新一集/最新播出季的信息反推季数与首播年份。若搜索结果显示存在正在播出或刚官宣的更新季，**必须**返回该最新季（title 写作"《剧名》 第N季"；isOngoing=true，latestUpdateInfo 填播出状态，元数据不全时用搜索结果补全），严禁只返回旧季或仅凭内部知识断言最新季。`;
+              userPrompt += `\n[强制] 必须先调用联网搜索工具 (web_search) 核实并获取最新信息，优先基于搜索结果回答；仅当搜索执行失败或无结果时，才基于已有知识返回有效 JSON。`;
+              if (searchContext) {
+                  userPrompt += `\n应用已获取的联网搜索结果：\n${searchContext}`;
+              }
+              userPrompt += `\n请尽力补全缺失的元数据（导演、主演、简介（尽量详细，不少于50字）、上映日期）。若无法确认具体日期，可返回年份。`;
           } else {
               userPrompt = `Search for media works matching the query: "${query}".`;
               if (type && type !== 'All') {
@@ -2399,7 +2658,12 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
                   userPrompt += ` (books, movies, TV series, comics, short dramas)`;
               }
               userPrompt += `\n[Constraint] Only return works (novels, movies, TV series, short dramas, comics, music albums). Do NOT include news, product reviews, comparisons, specs, prices, or phone/electronics items.`;
-              userPrompt += `\n[PREFER] Use the web search tool; if unavailable or no results, rely on your internal knowledge to return a valid JSON array:\n${searchContext}\nPlease do your best to fill in missing metadata (Director, Cast, Description (detailed, >50 words), Release Date). If exact date is unknown, year is acceptable.`;
+              userPrompt += `\n[LATEST SEASON] If the target is a seasonal work (TV series/anime/short drama), you MUST look up its newest season: search in both the original language and English (e.g. "${q} latest season", "<English title> season N"), ground on the newest episode/season info in the results, and include that season as one returned item (title as "Title Season N" where applicable). If the results show a newer or currently-airing season beyond your internal knowledge, you MUST return it (isOngoing=true, latestUpdateInfo = airing status) even when some metadata is missing. Fill latestUpdateInfo with the current airing state. Do NOT return only older seasons, and do NOT assert the newest season from memory alone.`;
+              userPrompt += `\n[REQUIRED] You MUST call the web_search tool first to verify and fetch up-to-date info, and ground your answer in search results; only fall back to internal knowledge if the search fails or returns nothing.`;
+              if (searchContext) {
+                  userPrompt += `\nWeb results already fetched by the app:\n${searchContext}`;
+              }
+              userPrompt += `\nPlease do your best to fill in missing metadata (Director, Cast, Description (detailed, >50 words), Release Date). If exact date is unknown, year is acceptable.`;
           }
       } else {
           if (isChinese) {
@@ -2410,6 +2674,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
                   userPrompt += ` (包括书籍、电影、电视剧、漫画、短剧)`;
               }
               userPrompt += `\n[系列] 若查询为系列作品（如第一部/第二部/续集），请分别返回各部作品，并给出准确年份。`;
+              userPrompt += `\n[最新季] 若目标作品为分季作品（电视剧/番剧/短剧），请从搜索结果中确认其最新一季（季数、首播年份、最新更新集数）并作为一条结果返回（title 写作"《剧名》 第N季"）；搜索时中英文关键词都尝试；若结果显示有正在播出或刚官宣的更新季，必须返回该季（isOngoing=true）；严禁只返回旧季。`;
               userPrompt += `\n请利用你的联网搜索工具或参考以下搜索结果来获取准确信息：\n${searchContext}\n如搜索结果不足，请使用你的内部知识补全信息（导演、主演、简介）。请务必返回有效JSON数组。`;
           } else {
               userPrompt = `Search for media works matching the query: "${query}".`;
@@ -2418,6 +2683,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
               } else {
                   userPrompt += ` (books, movies, TV series, comics, short dramas)`;
               }
+              userPrompt += `\n[LATEST SEASON] If the target is a seasonal work (TV series/anime/short drama), confirm its newest season from the search results (season number, premiere year, latest episode) and include it as one returned item (title as "Title Season N"); search both the original language and English; if the results show a newer or currently-airing season, you MUST return it (isOngoing=true); do NOT return only older seasons.`;
               userPrompt += `\nUse your web search tool or refer to the following search results to verify info:\n${searchContext}\nIf search results are insufficient, please use your internal knowledge to complete the metadata (especially detailed description). Return ONLY a valid JSON array.`;
           }
       }
@@ -2430,7 +2696,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
 
       try {
         const aiT0 = performance.now();
-        const text = await callAI(messages, 0.1, { forceSearch: true });
+        const text = await callAI(messages, 0.1, { forceSearch: true, reasoningEffort: useAIStore.getState().searchReasoning });
         if (diagEnabled) addStep('AI 生成候选作品', aiT0, String(provider || 'ai'));
         if (text) {
             let jsonStr = "";
@@ -2459,7 +2725,6 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
                  aiItems = rawData.map((rawItem) => {
                     const item = normalizeMediaItem(rawItem);
                     const id = uuidv4();
-                    const placeholder = getPlaceholder(item.type || 'Media');
                     const posterUrl = prefetchedImages.get(item.title.toLowerCase()) || undefined;
                     const normalizeType = (v: any, title: string, desc?: string): MediaType => {
                         const s = String(v || '').toLowerCase();
@@ -2477,7 +2742,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
                         ...item,
                         type: normalizedType,
                         id,
-                        posterUrl: posterUrl || placeholder,
+                        posterUrl: posterUrl,
                         userRating: 0,
                         status: 'To Watch',
                         addedAt: new Date().toISOString()
@@ -2696,11 +2961,13 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
 };
 
 export const getSearchSnippets = async (query: string): Promise<string> => {
-    const { 
+    const {
         enableSearch,
         searchProvider,
-        getDecryptedGoogleKey,
-        googleSearchCx,
+        getDecryptedVertexKey,
+        vertexSearchProject,
+        vertexSearchEngine,
+        vertexSearchLocation,
         getDecryptedSerperKey,
         getDecryptedYandexKey,
         yandexSearchLogin,
@@ -2710,12 +2977,12 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
 
     if (!enableSearch) return "";
 
-    // Web mode: the user's selected engine first, then Google, then Serper,
+    // Web mode: the user's selected engine first, then Vertex, then Serper,
     // with the keyless DuckDuckGo block as the last resort.
-    const googleReady = !!(getDecryptedGoogleKey() || '').trim() && !!(googleSearchCx || '').trim();
+    const vertexReady = !!(getDecryptedVertexKey() || '').trim() && !!(vertexSearchProject || '').trim() && !!(vertexSearchEngine || '').trim();
     const serperReady = !!(getDecryptedSerperKey() || '').trim();
     const serperFirst = searchProvider === 'serper' && serperReady;
-    let triedGoogle = false;
+    let triedVertex = false;
     let triedSerper = false;
 
     try {
@@ -2723,8 +2990,10 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
             // Tauri Mode
              const providerList = resolveTauriSearchProviderList({
                 provider: searchProvider,
-                googleKey: getDecryptedGoogleKey(),
-                googleCx: googleSearchCx,
+                vertexKey: getDecryptedVertexKey(),
+                vertexProject: vertexSearchProject,
+                vertexEngine: vertexSearchEngine,
+                vertexLocation: vertexSearchLocation,
                 serperKey: getDecryptedSerperKey(),
                 yandexKey: getDecryptedYandexKey(),
                 yandexUser: yandexSearchLogin
@@ -2735,13 +3004,15 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
                     const rustConfig = {
                         provider: eff.provider,
                         api_key: eff.apiKey,
-                        cx: eff.cx,
+                        project: eff.project,
+                        engine: eff.engine,
+                        location: eff.location,
                         user: eff.user,
                         search_type: 'text',
                         proxy_url: getProxyUrl(),
                         use_system_proxy: useSystemProxy
                     };
-                    
+
                     const resultStr = await invoke<string>('web_search', { query, config: rustConfig });
                     const arr = JSON.parse(resultStr);
                     if (Array.isArray(arr) && arr.length > 0) {
@@ -2751,20 +3022,32 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
             }
         } else {
             // Web Mode
-            if (googleReady && (!serperFirst || triedSerper)) {
-                const apiKeyStr = getDecryptedGoogleKey();
-                if (apiKeyStr && googleSearchCx) {
+            if (vertexReady && (!serperFirst || triedSerper)) {
+                const apiKeyStr = getDecryptedVertexKey();
+                if (apiKeyStr && vertexSearchProject && vertexSearchEngine) {
                     const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
                     for (const apiKey of apiKeys) {
-                        const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${googleSearchCx}&q=${encodeURIComponent(query)}&num=3`;
+                        const host = (!vertexSearchLocation || vertexSearchLocation === 'global')
+                            ? 'discoveryengine.googleapis.com'
+                            : `${vertexSearchLocation}-discoveryengine.googleapis.com`;
+                        const url = `https://${host}/v1/projects/${encodeURIComponent(vertexSearchProject)}/locations/${encodeURIComponent(vertexSearchLocation || 'global')}/collections/default_collection/engines/${encodeURIComponent(vertexSearchEngine)}/servingConfigs/default_search:searchLite?key=${encodeURIComponent(apiKey)}`;
                         try {
                             await apiLimiter.acquire();
                             try {
-                                const res = await fetchWithTimeout(url, { timeoutMs: 8000 });
+                                const res = await fetchWithTimeout(url, {
+                                    timeoutMs: 8000,
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ query, pageSize: 3 })
+                                });
                                 if (res.ok) {
                                     const data = await res.json();
-                                    if (data.items) {
-                                        return data.items.map((i: any) => i.snippet || i.title).join('\n');
+                                    const items = (data.results || []).map((r: any) => ({
+                                        title: r?.document?.derivedStructData?.title || r?.document?.structData?.fields?.title || '',
+                                        snippet: r?.document?.derivedStructData?.snippets?.[0]?.snippet || r?.document?.derivedStructData?.extractive_answers?.[0]?.content || ''
+                                    })).filter((i: any) => i.title || i.snippet);
+                                    if (items.length > 0) {
+                                        return items.map((i: any) => i.snippet || i.title).join('\n');
                                     }
                                 }
                             } finally {
@@ -2778,9 +3061,9 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
                         }
                     }
                 }
-                triedGoogle = true;
+                triedVertex = true;
             }
-            if (serperReady && (serperFirst || triedGoogle || !googleReady)) {
+            if (serperReady && (serperFirst || triedVertex || !vertexReady)) {
                  const apiKeyStr = getDecryptedSerperKey();
                  if (apiKeyStr) {
                     const apiKeys = apiKeyStr.split(/[;；]/).map(k => k.trim()).filter(k => k);
@@ -3211,18 +3494,21 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
 
 // New Helper: Fetch Poster from Search
 export const fetchPosterFromSearch = async (title: string, year: string, type: string = 'movie'): Promise<PosterSearchResult> => {
-    const { 
-        enableSearch, 
-        searchProvider, 
-        getDecryptedGoogleKey, 
-        googleSearchCx, 
+    const {
+        enableSearch,
+        searchProvider,
+        getDecryptedVertexKey,
+        vertexSearchProject,
+        vertexSearchEngine,
+        vertexSearchLocation,
         getDecryptedSerperKey,
         getDecryptedYandexKey,
         yandexSearchLogin
     } = useAIStore.getState();
     const normalizeProvider = (sp: any): string => {
         const v = String(sp || '').toLowerCase();
-        return (v === 'google' || v === 'serper' || v === 'yandex') ? v : 'duckduckgo';
+        if (v === 'google') return 'vertex'; // legacy: Custom Search → Vertex AI Search
+        return (v === 'vertex' || v === 'serper' || v === 'yandex') ? v : 'duckduckgo';
     };
     const yearToken = (() => {
         const y = String(year || '').trim().slice(0, 4);
@@ -3245,50 +3531,118 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
             updatePosterCandidates(cacheKey, [omdb], omdb);
             return { picked: omdb, candidates: [omdb] };
         }
+        // OMDb is English-first: a Chinese title gets one retry in English.
+        const enTitleOffline = await translateTitleToEnglish(title);
+        if (enTitleOffline) {
+            const omdbEn = await fetchPosterFromOMDB(enTitleOffline, year);
+            if (omdbEn) {
+                setPreferredPoster(cacheKey, omdbEn);
+                updatePosterCandidates(cacheKey, [omdbEn], omdbEn);
+                return { picked: omdbEn, candidates: [omdbEn] };
+            }
+        }
         return { candidates: cachedCandidates };
     }
 
-    if (searchProvider === 'yandex') {
+    // API-direct sources first: a structured API response naming the poster
+    // (TMDB / Douban / OMDb / Wikipedia) is far higher confidence than scoring
+    // engine results — the engine search below only runs when all of them miss.
+    const tryApiSources = async (searchTitle: string, wikiEn: boolean = false): Promise<string | undefined> => {
+        // 1. TMDB: structured poster_path for the matched movie/series.
+        const tmdb = await fetchPosterFromTMDB(searchTitle, yearToken, type);
+        if (tmdb) return tmdb;
+        // 2. Douban covers (Tauri backend; strong for zh titles, covers all types).
+        if (isTauriEnv) {
+            try {
+                const kind = String(type || '').toLowerCase();
+                const t0 = performance.now();
+                const outD = await invoke<string>("douban_cover", { title: searchTitle, kind });
+                try {
+                    useAIStore.getState().appendLog({
+                        id: uuidv4(),
+                        ts: Date.now(),
+                        channel: 'search',
+                        provider: 'douban',
+                        query: searchTitle,
+                        request: { title: searchTitle, kind },
+                        response: outD,
+                        durationMs: Math.round(performance.now() - t0),
+                        searchType: 'image'
+                    });
+                } catch {}
+                const v = JSON.parse(outD || '{}');
+                if (v?.image && await checkImage(v.image)) return v.image;
+            } catch {}
+        }
+        // 3. OMDb (movies/series; English-first — the cross-language retry
+        // below gives Chinese titles a second chance through it).
+        const omdb = await fetchPosterFromOMDB(searchTitle, year);
+        if (omdb) return omdb;
+        // 4. Wikipedia page image (API; Tauri command or REST). Try the UI
+        // language first, then the other one — per-season articles for western
+        // shows usually exist only on en.wikipedia.
         try {
-            const first = await fetchPosterFromOMDB(title, year);
-            if (first) return { picked: first, candidates: [first] };
-            const langZh = i18n.language.startsWith('zh');
-            if (isTauriEnv) {
-                const jsonStr = await invoke<string>('wiki_pageimages', { title, lang_zh: langZh });
-                const data = JSON.parse(jsonStr);
-                if (data?.query?.pages) {
-                    const pages = Object.values(data.query.pages);
-                    if (pages.length > 0) {
-                        const p: any = pages[0];
-                        const img = p?.thumbnail?.source || p?.original?.source;
-                        if (typeof img === 'string' && img.length > 0) return { picked: img, candidates: [img] };
-                    }
-                }
-            } else {
-                const api = langZh ? 'https://zh.wikipedia.org/w/api.php' : 'https://en.wikipedia.org/w/api.php';
-                const res = await fetchWithTimeout(`${api}?action=query&prop=pageimages&piprop=thumbnail|original&pithumbsize=1024&format=json&origin=*&titles=${encodeURIComponent(title)}`, { timeoutMs: 8000 });
-                if (res.ok) {
-                    const data = await res.json();
+            const firstZh = wikiEn ? false : i18n.language.startsWith('zh');
+            for (const langZh of [firstZh, !firstZh]) {
+                if (isTauriEnv) {
+                    const jsonStr = await invoke<string>('wiki_pageimages', { title: searchTitle, lang_zh: langZh });
+                    const data = JSON.parse(jsonStr);
                     if (data?.query?.pages) {
                         const pages = Object.values(data.query.pages);
                         if (pages.length > 0) {
                             const p: any = pages[0];
                             const img = p?.thumbnail?.source || p?.original?.source;
-                            if (typeof img === 'string' && img.length > 0) return { picked: img, candidates: [img] };
+                            if (!p?.missing && typeof img === 'string' && img.length > 0 && await checkImage(img)) return img;
+                        }
+                    }
+                } else {
+                    const api = langZh ? 'https://zh.wikipedia.org/w/api.php' : 'https://en.wikipedia.org/w/api.php';
+                    const res = await fetchWithTimeout(`${api}?action=query&prop=pageimages&piprop=thumbnail|original&pithumbsize=1024&format=json&origin=*&titles=${encodeURIComponent(searchTitle)}`, { timeoutMs: 8000 });
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data?.query?.pages) {
+                            const pages = Object.values(data.query.pages);
+                            if (pages.length > 0) {
+                                const p: any = pages[0];
+                                const img = p?.thumbnail?.source || p?.original?.source;
+                                if (!p?.missing && typeof img === 'string' && img.length > 0 && await checkImage(img)) return img;
+                            }
                         }
                     }
                 }
             }
         } catch {}
-        const omdb = await fetchPosterFromOMDB(title, year);
-        if (omdb) return { picked: omdb, candidates: [omdb] };
-        return { candidates: [] };
+        return undefined;
+    };
+
+    const apiPicked = await tryApiSources(title);
+    if (apiPicked) {
+        setPreferredPoster(cacheKey, apiPicked);
+        updatePosterCandidates(cacheKey, [apiPicked], apiPicked);
+        return { picked: apiPicked, candidates: [apiPicked] };
     }
+
+    // Cross-language retry: OMDb/TMDB/Wikipedia are English-first — when a
+    // Chinese title missed every API source, run the whole chain once more
+    // with the English title (Wikipedia flips to en in this pass).
+    const enTitle = await translateTitleToEnglish(title);
+    if (enTitle) {
+        const retryPicked = await tryApiSources(enTitle, true);
+        if (retryPicked) {
+            setPreferredPoster(cacheKey, retryPicked);
+            updatePosterCandidates(cacheKey, [retryPicked], retryPicked);
+            return { picked: retryPicked, candidates: [retryPicked] };
+        }
+    }
+
+    // Yandex stays API-only for posters (its XML API has no image search and
+    // its text results never carried poster pages well).
+    if (searchProvider === 'yandex') return { candidates: [] };
 
     // Construct a more specific query
     const isChinese = i18n.language.startsWith('zh');
     let query = "";
-    
+
     if (isChinese) {
         // Localized query for better results with Chinese titles
         // Simplified queries to reduce latency and noise
@@ -3301,11 +3655,11 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
             case 'music': case '音乐': typeTerm = "专辑封面"; break;
             case 'short drama': case '短剧': typeTerm = "短剧海报 竖版"; break;
         }
-        query = `${title} ${yearToken ? `${yearToken} ` : ''}${typeTerm}`; 
+        query = `${title} ${yearToken ? `${yearToken} ` : ''}${typeTerm}`;
     } else {
         query = `"${title}" ${yearToken ? `${yearToken} ` : ''}${type} poster`;
     }
-    
+
     // ...
 
     try {
@@ -3337,6 +3691,9 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
             if (!host) return false;
             const lower = u.toLowerCase();
             if (lower.includes('douban.com/subject/')) return true;
+            // Per-season Wikipedia articles (e.g. "The Simpsons season 38")
+            // expose their poster as og:image — they are detail pages too.
+            if (host === 'wikipedia.org' || host.endsWith('.wikipedia.org')) return true;
             return posterDomains.some(d => {
                 const dom = String(d || '').toLowerCase().replace(/^www\./, '').split('/')[0];
                 return host === dom || host.endsWith(`.${dom}`) || u.toLowerCase().includes(dom);
@@ -3473,17 +3830,13 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
                     .filter((l: any) => typeof l === 'string')
                     .filter((l: string) => !isImageUrl(l))
                     .filter((l: string) => isPosterDetailLink(l))
+                    .slice(0, 3)
             ));
-            if (pages.length === 0) return undefined;
 
-            const { useSystemProxy, getProxyUrl } = useAIStore.getState();
-            for (const pageUrl of pages.slice(0, 4)) {
+            for (const pageUrl of pages) {
                 try {
                     const t0 = performance.now();
-                    const out = await invoke<string>('fetch_og_image', {
-                        url: pageUrl,
-                        config: { proxy_url: getProxyUrl(), use_system_proxy: useSystemProxy }
-                    });
+                    const out = await invoke<string>('fetch_og_image', { url: pageUrl });
                     try {
                         useAIStore.getState().appendLog({
                             id: uuidv4(),
@@ -3511,7 +3864,7 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
 
         if (isTauriEnv) {
             const { useSystemProxy, getProxyUrl } = useAIStore.getState();
-            const googleKey = getDecryptedGoogleKey();
+            const vertexKey = getDecryptedVertexKey();
             const serperKey = getDecryptedSerperKey();
             const yandexKey = getDecryptedYandexKey();
             const yandexUser = yandexSearchLogin;
@@ -3522,21 +3875,25 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
             };
 
             const providerList = (() => {
-                const out: Array<{ provider: TauriSearchProvider; api_key?: string; cx?: string; user?: string }> = [];
-                if (googleKey && googleSearchCx) out.push({ provider: 'google', api_key: googleKey, cx: googleSearchCx });
+                const out: Array<{ provider: TauriSearchProvider; api_key?: string; project?: string; engine?: string; location?: string; user?: string }> = [];
+                if (vertexKey && vertexSearchProject && vertexSearchEngine) out.push({ provider: 'vertex', api_key: vertexKey, project: vertexSearchProject, engine: vertexSearchEngine, location: vertexSearchLocation || 'global' });
                 if (serperKey) out.push({ provider: 'serper', api_key: serperKey });
                 if (yandexKey && yandexUser) out.push({ provider: 'yandex', api_key: yandexKey, user: yandexUser });
                 out.push({ provider: 'duckduckgo' });
                 return out;
             })();
 
-            const imageProviders = providerList.filter(p => p.provider === 'google' || p.provider === 'serper');
+            // Vertex AI Search has no image-search endpoint; posters come from
+            // Serper here and from the API chain / wiki fallbacks above.
+            const imageProviders = providerList.filter(p => p.provider === 'serper');
 
-            const runWebSearch = async (qv: string, p: { provider: TauriSearchProvider; api_key?: string; cx?: string; user?: string }, search_type: 'image' | 'text') => {
+            const runWebSearch = async (qv: string, p: { provider: TauriSearchProvider; api_key?: string; project?: string; engine?: string; location?: string; user?: string }, search_type: 'image' | 'text') => {
                 const rustConfig = {
                     provider: p.provider,
                     api_key: p.api_key,
-                    cx: p.cx,
+                    project: p.project,
+                    engine: p.engine,
+                    location: p.location,
                     user: p.user,
                     search_type,
                     ...baseConfig
@@ -3550,7 +3907,7 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
                         channel: 'search',
                         provider: rustConfig.provider,
                         query: qv,
-                        request: { config: { provider: rustConfig.provider, cx: rustConfig.cx, user: rustConfig.user, search_type: rustConfig.search_type } },
+                        request: { config: { provider: rustConfig.provider, engine: rustConfig.engine, user: rustConfig.user, search_type: rustConfig.search_type } },
                         response: resultStr,
                         durationMs: Math.round(performance.now() - start),
                         searchType: search_type
@@ -3597,67 +3954,13 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
                     } catch {}
                 }
             }
-
-            try {
-                const kind = String(type || '').toLowerCase();
-                const t0 = performance.now();
-                const outD = await invoke<string>("douban_cover", { title, kind });
-                try {
-                    useAIStore.getState().appendLog({
-                        id: uuidv4(),
-                        ts: Date.now(),
-                        channel: 'search',
-                        provider: 'douban',
-                        query: title,
-                        request: { title, kind },
-                        response: outD,
-                        durationMs: Math.round(performance.now() - t0),
-                        searchType: 'image'
-                    });
-                } catch {}
-                try {
-                    const v = JSON.parse(outD || '{}');
-                    if (v && v.image) { setPreferredPoster(cacheKey, v.image); return { picked: v.image, candidates: [v.image] }; }
-                } catch {}
-            } catch {}
         }
         else {
             for (const qv of queryVariants) {
                 let results: any[] = [];
-                if (searchProvider === 'google') {
-                    const apiKey = getDecryptedGoogleKey();
-                    if (apiKey && googleSearchCx) {
-                        const cacheKey = `google_img_${googleSearchCx}_${qv}`;
-                        const cached = searchCache.get(cacheKey);
-                        let data: any = null;
-                        if (cached && (Date.now() - cached.ts < CACHE_TTL)) {
-                            data = cached.data;
-                        } else {
-                            const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${googleSearchCx}&q=${encodeURIComponent(qv)}&searchType=image&safe=active&imgType=photo&num=6`;
-                            let res;
-                            try {
-                                await apiLimiter.acquire();
-                                res = await fetchWithTimeout(url, { timeoutMs: 10000 });
-                            } finally {
-                                apiLimiter.release();
-                            }
-                            if (res.status === 429) {
-                                console.warn("Google Custom Search quota exceeded (429).");
-                                showQuotaError("Quota Exceeded");
-                                if (cached) data = cached.data;
-                            } else if (res.ok) {
-                                data = await res.json();
-                                searchCache.set(cacheKey, { ts: Date.now(), data });
-                            }
-                        }
-                        if (data && data.items) {
-                            results = data.items.map((item: any) => {
-                                const img = item?.link || item?.image?.thumbnailLink || item?.pagemap?.cse_image?.[0]?.src;
-                                return { image: img, link: item?.link, title: item?.title, snippet: item?.snippet };
-                            });
-                        }
-                    }
-                }
+
+                // Vertex AI Search has no image-search endpoint; web mode relies
+                // on Serper images when configured, then the wiki/OMDb fallbacks.
 
                 if (results.length === 0 && searchProvider === 'serper') {
                     const apiKey = getDecryptedSerperKey();
@@ -3693,147 +3996,20 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
                 if (picked) { setPreferredPoster(cacheKey, picked); return { picked, candidates }; }
             }
         }
-
-        try {
-            const langZh = i18n.language.startsWith('zh');
-            if (isTauriEnv) {
-                const jsonStr = await invoke<string>('wiki_pageimages', { title, lang_zh: langZh });
-                const data = JSON.parse(jsonStr);
-                if (data?.query?.pages) {
-                    const pages = Object.values(data.query.pages);
-                    if (pages.length > 0) {
-                        const p: any = pages[0];
-                        const img = p?.thumbnail?.source || p?.original?.source;
-                        if (typeof img === 'string' && img.length > 0) return { picked: img, candidates: [img] };
-                    }
-                }
-            } else {
-                // pageimages only surfaces freely-licensed (Commons) pictures,
-                // while nearly all movie/series posters are non-free local
-                // uploads — so also scan the article's file list for a
-                // poster-ish file and resolve its real URL via imageinfo.
-                // Chinese articles often carry no files at all; bridge through
-                // Wikidata sitelinks to the English article, which almost
-                // always embeds a theatrical poster.
-                const wikiApiOf = (lang: 'zh' | 'en') => `https://${lang}.wikipedia.org/w/api.php`;
-
-                const wikiPageImage = async (api: string, pageTitle: string): Promise<string | undefined> => {
-                    const res = await fetchWithTimeout(`${api}?action=query&prop=pageimages&piprop=thumbnail|original&pithumbsize=1024&format=json&origin=*&titles=${encodeURIComponent(pageTitle)}`, { timeoutMs: 8000 });
-                    if (!res.ok) return undefined;
-                    const data = await res.json();
-                    const pages = Object.values(data?.query?.pages || {});
-                    const p: any = pages[0];
-                    if (p && !p.missing) {
-                        const img = p?.thumbnail?.source || p?.original?.source;
-                        if (typeof img === 'string' && img.length > 0) return img;
-                    }
-                    return undefined;
-                };
-
-                // Returns { picked, canonical } — canonical is the redirected
-                // article title, needed to look the item up on Wikidata.
-                const wikiArticlePoster = async (api: string, pageTitle: string): Promise<{ picked?: string; canonical?: string } | undefined> => {
-                    const listRes = await fetchWithTimeout(`${api}?action=query&prop=images&imlimit=80&redirects=1&format=json&origin=*&titles=${encodeURIComponent(pageTitle)}`, { timeoutMs: 8000 });
-                    if (!listRes.ok) return undefined;
-                    const listData = await listRes.json();
-                    const pages = Object.values(listData?.query?.pages || {});
-                    const canonical = (pages[0] as any)?.title || pageTitle;
-                    const files: string[] = [];
-                    for (const pg of pages as any[]) {
-                        for (const im of (pg?.images || [])) {
-                            const t = im?.title;
-                            if (typeof t === 'string' && /^File:.+\.(jpe?g|png|webp)$/i.test(t)) files.push(t);
-                        }
-                    }
-                    // Poster-like names first; drop logos, icons and other
-                    // non-poster artwork that commonly lives on film articles.
-                    // Word boundaries matter: bare "ost" would also kill every
-                    // "pOSTer" filename.
-                    const bad = /\b(logo|logos|icon|icons|flag|flags|map|maps|signature|soundtrack|ost|banner|wordmark|screenshot|diagram|chart|locator)s?\b/i;
-                    const good = /poster|海报|封面|cover|teaser|promo|official still|key art/i;
-                    const candidates = files.filter((f) => !bad.test(f) && good.test(f));
-                    if (candidates.length > 0) {
-                        const infoRes = await fetchWithTimeout(`${api}?action=query&prop=imageinfo&iiprop=url&format=json&origin=*&titles=${encodeURIComponent(candidates.slice(0, 20).join('|'))}`, { timeoutMs: 8000 });
-                        if (infoRes.ok) {
-                            const infoData = await infoRes.json();
-                            const infoPages = Object.values(infoData?.query?.pages || {});
-                            const urls: string[] = [];
-                            for (const pg of infoPages as any[]) {
-                                const u = pg?.imageinfo?.[0]?.url;
-                                if (typeof u === 'string' && u.length > 0) urls.push(u);
-                            }
-                            for (const u of urls) {
-                                if (await checkImage(u)) return { picked: u, canonical };
-                            }
-                        }
-                    }
-                    return { canonical };
-                };
-
-                const wikidataCrossLangTitle = async (site: 'zhwiki' | 'enwiki', pageTitle: string): Promise<string | undefined> => {
-                    try {
-                        const res = await fetchWithTimeout(`https://www.wikidata.org/w/api.php?action=wbgetentities&sites=${site}&titles=${encodeURIComponent(pageTitle)}&props=sitelinks&format=json&origin=*&normalize=1`, { timeoutMs: 8000 });
-                        if (!res.ok) return undefined;
-                        const data = await res.json();
-                        const entities = data?.entities || {};
-                        const other: 'enwiki' | 'zhwiki' = site === 'zhwiki' ? 'enwiki' : 'zhwiki';
-                        const self: 'zhwiki' | 'enwiki' = site;
-                        for (const ent of Object.values(entities) as any[]) {
-                            const sl = ent?.sitelinks || {};
-                            // Only trust the mapping when the item really links
-                            // back to the requested page (guards name drift).
-                            if (sl[self]?.title && sl[other]?.title) return sl[other].title;
-                        }
-                    } catch {}
-                    return undefined;
-                };
-
-                const tryWiki = async (site: 'zh' | 'en', pageTitle: string): Promise<string | undefined> => {
-                    const api = wikiApiOf(site);
-                    const res = await wikiArticlePoster(api, pageTitle);
-                    if (res?.picked) return res.picked;
-                    const canonical = res?.canonical || pageTitle;
-                    const viaPage = await wikiPageImage(api, canonical);
-                    if (viaPage) return viaPage;
-                    // Bridge to the other language via Wikidata sitelinks.
-                    const crossTitle = await wikidataCrossLangTitle(site === 'zh' ? 'zhwiki' : 'enwiki', canonical);
-                    if (crossTitle) {
-                        const otherSite: 'zh' | 'en' = site === 'zh' ? 'en' : 'zh';
-                        const crossRes = await wikiArticlePoster(wikiApiOf(otherSite), crossTitle);
-                        if (crossRes?.picked) return crossRes.picked;
-                        return await wikiPageImage(wikiApiOf(otherSite), crossTitle);
-                    }
-                    return undefined;
-                };
-
-                const primary: 'zh' | 'en' = langZh ? 'zh' : 'en';
-                const secondary: 'zh' | 'en' = langZh ? 'en' : 'zh';
-                try {
-                    const picked = (await tryWiki(primary, title)) || (await tryWiki(secondary, title));
-                    if (picked) {
-                        setPreferredPoster(cacheKey, picked);
-                        updatePosterCandidates(cacheKey, [picked], picked);
-                        return { picked, candidates: [picked] };
-                    }
-                } catch {}
-            }
-        } catch {}
-
     } catch (e) {
         console.warn(`Failed to fetch poster from search for ${title}`, e);
     }
 
-    // Final fallback: Try OMDB if available
-    const omdb = await fetchPosterFromOMDB(title, year);
-    if (omdb) { setPreferredPoster(cacheKey, omdb); return { picked: omdb, candidates: [omdb] }; }
     return { candidates: [] };
 };
 
 export const testSearchConnection = async (
     provider?: string,
     configOverride?: {
-        googleSearchApiKey?: string;
-        googleSearchCx?: string;
+        vertexSearchApiKey?: string;
+        vertexSearchProject?: string;
+        vertexSearchEngine?: string;
+        vertexSearchLocation?: string;
         serperApiKey?: string;
         yandexSearchApiKey?: string;
         yandexSearchLogin?: string;
@@ -3843,10 +4019,13 @@ export const testSearchConnection = async (
     const effProvider = provider || s.searchProvider;
     const normalizeProvider = (sp: any): string => {
         const v = String(sp || '').toLowerCase();
-        return (v === 'google' || v === 'serper' || v === 'yandex') ? v : 'duckduckgo';
+        if (v === 'google') return 'vertex'; // legacy: Custom Search → Vertex AI Search
+        return (v === 'vertex' || v === 'serper' || v === 'yandex') ? v : 'duckduckgo';
     };
-    const effGoogleKey = configOverride?.googleSearchApiKey || s.getDecryptedGoogleKey();
-    const effGoogleCx = configOverride?.googleSearchCx || s.googleSearchCx;
+    const effVertexKey = configOverride?.vertexSearchApiKey || s.getDecryptedVertexKey();
+    const effVertexProject = configOverride?.vertexSearchProject || s.vertexSearchProject;
+    const effVertexEngine = configOverride?.vertexSearchEngine || s.vertexSearchEngine;
+    const effVertexLocation = configOverride?.vertexSearchLocation || s.vertexSearchLocation || 'global';
     const effSerperKey = configOverride?.serperApiKey || s.getDecryptedSerperKey();
     const effYandexKey = configOverride?.yandexSearchApiKey || s.getDecryptedYandexKey();
     const effYandexLogin = configOverride?.yandexSearchLogin || s.yandexSearchLogin;
@@ -3858,7 +4037,7 @@ export const testSearchConnection = async (
     // Check cache (only if single key or we accept cache for any key match - simplified for now)
     // Actually for test connection we might want to bypass cache to really test?
     // But existing logic uses cache. Let's keep cache logic simple: if inputs match exactly.
-    const cacheKey = `test_conn:${effProvider}:${effGoogleKey || ''}:${effGoogleCx || ''}:${effSerperKey || ''}:${effYandexKey || ''}:${effYandexLogin || ''}`;
+    const cacheKey = `test_conn:${effProvider}:${effVertexKey || ''}:${effVertexProject || ''}:${effVertexEngine || ''}:${effSerperKey || ''}:${effYandexKey || ''}:${effYandexLogin || ''}`;
     const cached = testConnectionCache.get(cacheKey);
     if (cached && (Date.now() - cached.ts < TEST_CACHE_TTL)) {
         return cached.res;
@@ -3869,16 +4048,16 @@ export const testSearchConnection = async (
         let singleKeyProvider = false;
 
         switch (effProvider) {
-            case 'google': 
-                apiKeys = splitKeys(effGoogleKey); 
+            case 'vertex':
+                apiKeys = splitKeys(effVertexKey);
                 break;
-            case 'serper': 
-                apiKeys = splitKeys(effSerperKey); 
+            case 'serper':
+                apiKeys = splitKeys(effSerperKey);
                 break;
-            case 'yandex': 
-                apiKeys = splitKeys(effYandexKey); 
+            case 'yandex':
+                apiKeys = splitKeys(effYandexKey);
                 break;
-            default: 
+            default:
                 singleKeyProvider = true;
                 break;
         }
@@ -3887,7 +4066,9 @@ export const testSearchConnection = async (
              const rustConfig = {
                 provider: normalizeProvider(effProvider),
                 api_key: undefined,
-                cx: effGoogleCx,
+                project: effVertexProject,
+                engine: effVertexEngine,
+                location: effVertexLocation,
                 user: effYandexLogin,
                 search_type: 'text',
                 proxy_url: s.getProxyUrl(),
@@ -3911,7 +4092,9 @@ export const testSearchConnection = async (
             const rustConfig = {
                 provider: normalizeProvider(effProvider),
                 api_key: apiKey,
-                cx: effGoogleCx,
+                project: effVertexProject,
+                engine: effVertexEngine,
+                location: effVertexLocation,
                 user: effYandexLogin,
                 search_type: 'text',
                 proxy_url: s.getProxyUrl(),
@@ -3935,17 +4118,25 @@ export const testSearchConnection = async (
     } else {
         // Web Mode
         try {
-            if (effProvider === 'google') {
-                if (!effGoogleKey || !effGoogleCx) return { ok: false, error: 'missing_google_config' };
-                const apiKeys = splitKeys(effGoogleKey);
+            if (effProvider === 'vertex') {
+                if (!effVertexKey || !effVertexProject || !effVertexEngine) return { ok: false, error: 'missing_vertex_config' };
+                const apiKeys = splitKeys(effVertexKey);
                 let lastError = 'no_keys';
-                
+
                 for (const apiKey of apiKeys) {
-                    const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${effGoogleCx}&q=test&num=1`;
+                    const host = (!effVertexLocation || effVertexLocation === 'global')
+                        ? 'discoveryengine.googleapis.com'
+                        : `${effVertexLocation}-discoveryengine.googleapis.com`;
+                    const url = `https://${host}/v1/projects/${encodeURIComponent(effVertexProject)}/locations/${encodeURIComponent(effVertexLocation || 'global')}/collections/default_collection/engines/${encodeURIComponent(effVertexEngine)}/servingConfigs/default_search:searchLite?key=${encodeURIComponent(apiKey)}`;
                     try {
-                        const res = await fetchWithTimeout(url, { timeoutMs: 15000 });
+                        const res = await fetchWithTimeout(url, {
+                            timeoutMs: 15000,
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ query: 'test', pageSize: 1 })
+                        });
                         if (res.ok) {
-                            return { ok: true, provider: 'google' };
+                            return { ok: true, provider: 'vertex' };
                         }
                         if (res.status === 429) {
                             lastError = 'Quota Exceeded (429)';
@@ -3956,7 +4147,7 @@ export const testSearchConnection = async (
                         lastError = e?.message || String(e);
                     }
                 }
-                return { ok: false, provider: 'google', error: lastError };
+                return { ok: false, provider: 'vertex', error: lastError };
             }
             
             if (effProvider === 'serper') {
@@ -4089,7 +4280,6 @@ const createFallbackItemsFromContext = async (searchContext: string, limit: numb
                 isOngoing: type === MediaType.TV_SERIES,
                 latestUpdateInfo: '',
                 rating: '',
-                posterUrl: getPlaceholder(type),
                 userRating: 0,
                 status: 'To Watch',
                 addedAt: new Date().toISOString()
@@ -4176,12 +4366,30 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
   const { enableSearch: trendingEnableSearch, enableNetworking: trendingEnableNetworking } = useAIStore.getState();
   const toolCallingProviders: AIProvider[] = ['moonshot', 'deepseek', 'openai', 'qwen', 'google', 'mistral', 'mimo', 'zhipu'];
   const webSearchAvailable = trendingEnableSearch && trendingEnableNetworking && toolCallingProviders.includes(provider as AIProvider);
-  const searchUnavailableNote = webSearchAvailable ? '' : (isChinese
+
+  // Forced web grounding: the app itself runs a built-in web search first and
+  // injects the results, so recommendations rest on real data even when the
+  // model skips the web_search tool. Native-search models search server-side
+  // and need no pre-fetch. The user's configured engine runs first, with the
+  // keyless built-in DuckDuckGo as fallback (see performClientSideSearch).
+  const canNativeSearch = canUseNativeSearch(true);
+  let searchContext = "";
+  if (trendingEnableNetworking && !canNativeSearch) {
+      const preQuery = mode === 'preference'
+          ? (isChinese ? `${currentYear} 高分热门电影 电视剧 小说 推荐` : `best rated popular movies tv series books ${currentYear}`)
+          : (mode === 'custom' && trendingPrompt.trim())
+              ? trendingPrompt.trim().replace(/\s+/g, ' ').slice(0, 60)
+              : (isChinese ? `最热门电影电视剧 ${monthStr}` : `most popular movies and tv series ${currentYear}-${currentMonth}`);
+      try {
+          searchContext = await performClientSideSearch(preQuery, true);
+      } catch { searchContext = ""; }
+  }
+
+  // The knowledge-fallback note only applies when there is genuinely no web
+  // data source: no tool-capable provider AND no pre-fetched search results.
+  const searchUnavailableNote = (webSearchAvailable || searchContext) ? '' : (isChinese
       ? `\n\n[重要] 当前环境没有可用的联网搜索工具：请直接基于你的已有知识完成推荐，只推荐你确信真实存在的具体作品；不要虚构确切的上映日期（不确定时 releaseDate 返回年份），不要臆造 latestUpdateInfo。仍须返回严格合法的 JSON 数组。`
       : `\n\n[IMPORTANT] No web search tool is available in this environment: base your recommendations on your own knowledge and only recommend specific works you are confident actually exist. Do NOT fabricate exact release dates (return the year when unsure) or latestUpdateInfo. Still return a strictly valid JSON array.`);
-
-  // We no longer perform a manual pre-search. We let the AI decide what to search based on the prompt.
-  const searchContext = "";
 
   // Exclusion list: what is on screen right now + everything recommended in
   // previous rounds + (in preference mode) the user's own collection. This is
@@ -4317,6 +4525,14 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
      }
   }
 
+  // Inject the app-fetched web results so the recommendation is grounded in
+  // real data even if the model never calls the web_search tool itself.
+  if (searchContext) {
+      userPrompt += isChinese
+          ? `\n\n[联网搜索结果] 以下是应用通过联网搜索获取的最新结果，**必须**优先基于这些结果推荐，并可用 web_search 工具进一步核实：\n${searchContext}`
+          : `\n\n[Web Search Results] These results were fetched by the app via web search. You MUST base your recommendations primarily on them; you may verify further with the web_search tool:\n${searchContext}`;
+  }
+
   // Fallback instructions if search fails
   userPrompt += searchUnavailableNote;
   userPrompt += `\n\nIMPORTANT: ALWAYS return a valid JSON array, even if empty or with fewer items. Do NOT return markdown text or explanations outside the JSON.`;
@@ -4366,7 +4582,7 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
       }
   };
 
-  const text = await callAI(messages, 0.3, { forceSearch: true });
+  const text = await callAI(messages, 0.3, { forceSearch: true, reasoningEffort: useAIStore.getState().searchReasoning });
   let rawData = await parseTrending(text || "");
   // Drop empty titles and duplicates before anything else — the model
   // occasionally repeats an entry or returns blank placeholders.
@@ -4440,17 +4656,17 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
 
   // Enhance with IDs and Posters
   // Strategy: 
-  // 1. Map rawData to MediaItems with placeholders.
-  // 2. Fetch posters in parallel, but with a strict timeout to ensure the UI isn't blocked for too long.
-  // 3. If a poster search times out, we fallback to the placeholder, allowing the text to show up.
+  // 1. Map rawData to MediaItems with no poster yet (the card shows its own
+  //    empty state — no placeholder image is ever stored on the item).
+  // 2. Fetch posters in parallel (TMDB details first, then engine search) with
+  //    a strict timeout so the UI isn't blocked; items that find nothing simply
+  //    stay posterless, which keeps the poster backfill/repair paths eligible.
   
   const results = rawData.map((item) => {
     const id = uuidv4();
-    const placeholder = getPlaceholder(item.type || 'Media');
     return {
       ...item,
       id,
-      posterUrl: placeholder,
       userRating: 0,
       status: 'To Watch',
       addedAt: new Date().toISOString()
