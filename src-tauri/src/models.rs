@@ -65,6 +65,16 @@ pub struct UserPublic {
     pub username: String,
 }
 
+/// Per-season episode metadata for the episode-grid UI (S1 N集 / S2 M集).
+/// `released` is the aired episode count when the season is still airing;
+/// absent means fully aired.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeasonInfo {
+    pub season: i32,
+    pub total: i32,
+    pub released: Option<i32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaItem {
     pub id: String,
@@ -93,6 +103,10 @@ pub struct MediaItem {
     pub tmdb_media_type: Option<String>,
     #[serde(rename = "userProgress")]
     pub user_progress: Option<String>,
+    #[serde(rename = "totalEpisodes")]
+    pub total_episodes: Option<i32>,
+    #[serde(rename = "seasons")]
+    pub seasons: Option<Vec<SeasonInfo>>,
     #[serde(rename = "notificationEnabled")]
     pub notification_enabled: Option<bool>,
     #[serde(rename = "lastCheckedAt")]

@@ -576,6 +576,8 @@ async fn call_tool(
                 tmdb_id: None,
                 tmdb_media_type: None,
                 user_progress: None,
+                total_episodes: None,
+                seasons: None,
                 notification_enabled: None,
                 last_checked_at: None,
                 has_new_update: None,

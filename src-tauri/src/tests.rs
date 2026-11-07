@@ -21,7 +21,13 @@ fn test_media_item_serialization() {
         cast: None,
         tmdb_id: None,
         tmdb_media_type: None,
-        user_progress: None,
+        user_progress: Some("S2E4".to_string()),
+        total_episodes: Some(13),
+        seasons: Some(vec![crate::models::SeasonInfo {
+            season: 2,
+            total: 13,
+            released: Some(4),
+        }]),
         notification_enabled: None,
         last_checked_at: None,
         has_new_update: None,
@@ -40,6 +46,16 @@ fn test_media_item_serialization() {
     assert!(json.contains("\"title\":\"Test Movie\""));
     assert!(json.contains("\"type\":\"Movie\""));
     assert!(json.contains("\"isPinned\":true"));
+    // New tracking fields keep their camelCase names in storage.
+    assert!(json.contains("\"totalEpisodes\":13"));
+    assert!(json.contains("\"seasons\":[{\"season\":2,\"total\":13,\"released\":4}]"));
+
+    // Old-version records without the new fields still load (backward
+    // compatibility): missing optional fields deserialize as None.
+    let old_json = r#"{"id":"old","title":"Old","directorOrAuthor":"","description":"","releaseDate":"","type":"Book","isOngoing":false}"#;
+    let old_item: crate::models::MediaItem = serde_json::from_str(old_json).unwrap();
+    assert!(old_item.total_episodes.is_none());
+    assert!(old_item.seasons.is_none());
 }
 
 #[test]
@@ -342,6 +358,8 @@ fn make_db_item(id: &str, title: &str) -> crate::models::MediaItem {
         tmdb_id: None,
         tmdb_media_type: None,
         user_progress: None,
+        total_episodes: None,
+        seasons: None,
         notification_enabled: None,
         last_checked_at: None,
         has_new_update: None,
