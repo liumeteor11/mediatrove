@@ -20,6 +20,7 @@ interface CollectionState {
   updateCollectionMembers: (collectionId: string, memberIds: string[]) => void;
   importCollection: (items: MediaItem[]) => void;
   reorderCollection: (newOrder: MediaItem[]) => void;
+  bumpToFront: (id: string) => void;
   exportCollection: (targetDir?: string, redactSensitive?: boolean) => Promise<string | null>;
   getStats: () => { total: number; watched: number; toWatch: number; favorites: number };
   refreshForUser: () => Promise<void>;
@@ -103,7 +104,7 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
 
   reorderCollection: (newOrder) => {
       set({ collection: newOrder });
-      
+
       if (isTauri) {
           const username = useAuthStore.getState().user?.username || 'guest';
           const ids = newOrder.map(i => i.id);
@@ -112,6 +113,36 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
           localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: newOrder }, version: 0 }));
       }
   },
+
+  // Surface an item at the front of the manual order (not a pin — pinned
+  // items still sort above it). Used when an update check finds new content.
+  // Mirrors the re-add bump in addToCollection: a member inside a collection
+  // folder surfaces the folder itself so the whole series moves forward while
+  // the member keeps its place among its siblings.
+  bumpToFront: (id) => set((state) => {
+      const item = state.collection.find(i => i.id === id);
+      if (!item) return {};
+      const parent = item.parentCollectionId
+          ? state.collection.find(c => c.id === item.parentCollectionId)
+          : undefined;
+      const anchorItem = (item.isCollection || !parent) ? item : parent;
+      if (state.collection[0]?.id === anchorItem.id) return {};
+
+      const updatedCollection = [
+          anchorItem,
+          ...state.collection.filter(c => c.id !== anchorItem.id)
+      ];
+
+      if (isTauri) {
+          const username = useAuthStore.getState().user?.username || 'guest';
+          const ids = updatedCollection.map(i => i.id);
+          invoke('reorder_collection', { username, ids }).catch(console.error);
+      } else {
+          localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
+      }
+
+      return { collection: updatedCollection };
+  }),
 
   exportCollection: async (targetPath?: string, redactSensitive: boolean = true) => {
     try {
@@ -218,11 +249,28 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
   },
 
   removeFromCollection: (id) => set((state) => {
-    const updatedCollection = state.collection.filter((item) => item.id !== id);
-    
+    const removedItem = state.collection.find((item) => item.id === id);
+    // Deleting a collection container would orphan its members forever (they
+    // keep a parentCollectionId pointing at the deleted folder and stay hidden
+    // from the top-level view), so release them back to the top level.
+    const releasedMembers: MediaItem[] = [];
+    const updatedCollection = state.collection
+      .filter((item) => item.id !== id)
+      .map((item) => {
+          if (removedItem?.isCollection && item.parentCollectionId === id) {
+              const next = { ...item, parentCollectionId: undefined, lastEditedAt: Date.now() };
+              releasedMembers.push(next);
+              return next;
+          }
+          return item;
+      });
+
     if (isTauri) {
         const username = useAuthStore.getState().user?.username || 'guest';
         invoke('remove_item', { username, id }).catch(console.error);
+        releasedMembers.forEach(item => {
+            invoke('save_item', { username, item }).catch(console.error);
+        });
     } else {
         localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
     }

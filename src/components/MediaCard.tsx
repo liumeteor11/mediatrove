@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Star, Clock, Calendar, Heart, Check, Bookmark, MoreVertical, Info, Bell, BellOff, RefreshCw, Edit, Trash2, User, Users, Plus, Minus, ChevronsUp, Tags, Layers, FolderPlus } from 'lucide-react';
+import { Star, Clock, Calendar, Heart, Check, Bookmark, MoreVertical, Info, Bell, BellOff, RefreshCw, Edit, Trash2, User, Users, ChevronsUp, Tags, Layers, FolderPlus, ChevronDown, ChevronUp } from 'lucide-react';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
 import clsx from 'clsx';
 import { useThemeStore } from '../store/useThemeStore';
@@ -11,28 +11,19 @@ import ReactMarkdown from 'react-markdown';
 import { toast } from 'react-toastify';
 import { checkUpdates, repairMediaItem, FALLBACK_POSTER, isPlaceholderPosterUrl } from '../services/aiService';
 
-const smartIncrement = (str: string): string => {
+// Episode-grid helpers. The app's progress convention is "the last number in
+// the string is the episode counter" for flat progress ("E30", "第 680 话"),
+// while season-aware progress uses "S{n}E{m}".
+const lastNumber = (str?: string): number | null => {
+    if (!str) return null;
     const match = str.match(/(\d+)(?!.*\d)/);
-    if (!match) return str;
-    const numStr = match[0];
-    const num = parseInt(numStr, 10);
-    const nextNum = num + 1;
-    // Attempt to preserve zero-padding
-    const nextNumStr = nextNum.toString().padStart(numStr.length, '0'); 
-    const index = match.index!;
-    return str.substring(0, index) + nextNumStr + str.substring(index + numStr.length);
+    return match ? parseInt(match[1], 10) : null;
 };
 
-const smartDecrement = (str: string): string => {
+const withLastNumber = (str: string, n: number): string => {
     const match = str.match(/(\d+)(?!.*\d)/);
-    if (!match) return str;
-    const numStr = match[0];
-    const num = parseInt(numStr, 10);
-    if (num <= 0) return str;
-    const nextNum = num - 1;
-    const nextNumStr = nextNum.toString().padStart(numStr.length, '0');
-    const index = match.index!;
-    return str.substring(0, index) + nextNumStr + str.substring(index + numStr.length);
+    if (!match) return `E${n}`;
+    return str.substring(0, match.index!) + String(n).padStart(match[0].length, '0') + str.substring(match.index! + match[0].length);
 };
 
 interface MediaCardProps {
@@ -71,6 +62,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   const [imgLoading, setImgLoading] = useState(true);
   const [imgFailed, setImgFailed] = useState(false);
   const [isBackRefreshing, setIsBackRefreshing] = useState(false);
+  // Episode list defaults to collapsed; only actively-following works start
+  // expanded.
+  const [gridExpanded, setGridExpanded] = useState(item.isOngoing);
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.matchMedia('(max-width: 768px)').matches);
@@ -81,7 +75,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   }, []);
   
   const { theme } = useThemeStore();
-  const { updateItem, removeFromCollection, moveCategory } = useCollectionStore();
+  const { updateItem, removeFromCollection, moveCategory, bumpToFront } = useCollectionStore();
 
   const getCategoryLabel = (cat: CollectionCategory) => {
     switch (cat) {
@@ -170,6 +164,93 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   };
   const notificationEnabled = item.notificationEnabled !== false;
 
+  // Episode grid data. Structured seasons (from TMDB checks) render one block
+  // per season; otherwise a flat grid derives from totalEpisodes or a "全N集"
+  // style latestUpdateInfo, falling back to the released-to count (two states:
+  // watched vs released). Long runs are windowed around the current progress.
+  const isEpisodicItem = item.type === MediaType.TV_SERIES || item.type === MediaType.COMIC || item.type === MediaType.BOOK || item.type === MediaType.SHORT_DRAMA;
+  const epUnitKey = item.type === MediaType.COMIC ? 'media_card.unit_hua' : item.type === MediaType.BOOK ? 'media_card.unit_zhang' : 'media_card.unit_ji';
+  const EP_GRID_CAP = 60;
+
+  const progressMatch = /S(\d+)\s*E(\d+)/i.exec(item.userProgress || '');
+  const progressSeason = progressMatch ? parseInt(progressMatch[1], 10) : null;
+  const progressEp = progressMatch ? parseInt(progressMatch[2], 10) : null;
+  const flatWatched = lastNumber(item.userProgress);
+
+  interface SeasonBlock {
+    season: number; // 0 = flat (no season info)
+    total: number;
+    released: number;
+    watched: number;
+    start: number;
+    end: number;
+    windowed: boolean;
+    list: number[];
+  }
+
+  const makeBlock = (season: number, total: number, released: number, watched: number): SeasonBlock => {
+    const windowed = total > EP_GRID_CAP;
+    const start = windowed ? Math.max(1, Math.min(watched - 30, total - EP_GRID_CAP + 1)) : 1;
+    const end = windowed ? start + EP_GRID_CAP - 1 : total;
+    return {
+      season, total, released, watched, windowed, start, end,
+      list: Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
+    };
+  };
+
+  const epCaptionFor = (total: number, released: number) =>
+      released < total
+          ? t('media_card.episodes_partial', { released, total, unit: t(epUnitKey) })
+          : t('media_card.episodes_total', { count: total, unit: t(epUnitKey) });
+
+  const seasonBlocks: SeasonBlock[] | null = item.seasons && item.seasons.length > 0
+      ? item.seasons.map(info => {
+          const released = Math.min(info.released ?? info.total, info.total);
+          let watched = 0;
+          if (progressSeason != null && progressEp != null) {
+              // "S{n}E{m}" implies linear progress: everything before the
+              // marked season is finished.
+              if (info.season < progressSeason) watched = info.total;
+              else if (info.season === progressSeason) watched = Math.min(progressEp, info.total);
+          } else if (info.season === item.seasons![item.seasons!.length - 1].season) {
+              watched = Math.min(flatWatched ?? 0, info.total);
+          }
+          return makeBlock(info.season, info.total, released, watched);
+      })
+      : null;
+
+  const epReleased = lastNumber(item.latestUpdateInfo);
+  const epTotalMatch = /全\s*(\d+)/.exec(item.latestUpdateInfo || '');
+  const epTotal = item.totalEpisodes ?? (epTotalMatch ? parseInt(epTotalMatch[1], 10) : null);
+  const flatMax = epTotal ?? epReleased ?? 0;
+  const flatReleased = epTotal != null ? Math.min(epReleased ?? epTotal, epTotal) : flatMax;
+  const flatBlock: SeasonBlock | null = !seasonBlocks && flatMax > 0
+      ? makeBlock(0, flatMax, flatReleased, Math.min(flatWatched ?? 0, flatMax))
+      : null;
+  const flatCaption = epTotal != null && epReleased != null && epReleased < epTotal
+      ? t('media_card.episodes_partial', { released: epReleased, total: epTotal, unit: t(epUnitKey) })
+      : epTotal != null
+          ? t('media_card.episodes_total', { count: epTotal, unit: t(epUnitKey) })
+          : epReleased != null
+              ? t('media_card.episodes_ongoing', { count: epReleased, unit: t(epUnitKey) })
+              : '';
+
+  const blocks: SeasonBlock[] = seasonBlocks ?? (flatBlock ? [flatBlock] : []);
+  const hasGrid = blocks.length > 0;
+  const gridSummary = seasonBlocks
+      ? `${t('media_card.episodes_seasons', { count: seasonBlocks.length })} · ${epCaptionFor(seasonBlocks[seasonBlocks.length - 1].total, seasonBlocks[seasonBlocks.length - 1].released)}`
+      : flatCaption;
+
+  const markWatched = (block: SeasonBlock, n: number) => {
+      const newProgress = seasonBlocks
+          ? (item.seasons!.length > 1 ? `S${block.season}E${n}` : `E${n}`)
+          : (item.userProgress ? withLastNumber(item.userProgress, n) : `E${n}`);
+      updateItem(item.id, {
+          userProgress: newProgress,
+          ...(n >= block.released && block.released > 0 ? { hasNewUpdate: false } : {})
+      });
+  };
+
   const handleBackRefresh = async (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -215,9 +296,15 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                   updateItem(item.id, {
                       latestUpdateInfo: update.latestUpdateInfo,
                       isOngoing: update.isOngoing,
+                      ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
+                      ...(update.seasons ? { seasons: update.seasons } : {}),
                       lastCheckedAt: now,
                       hasNewUpdate: changed ? true : item.hasNewUpdate
                   });
+                  // New content floats the work to the front (not a pin).
+                  if (changed && update.isOngoing) {
+                      bumpToFront(item.id);
+                  }
                   updated = true;
               } else {
                   updateItem(item.id, { lastCheckedAt: now });
@@ -501,21 +588,21 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                 </div>
               )}
 
-              {/* Tracking Section for Ongoing Series in Collection */}
-              {item.isOngoing && item.category && (
+              {/* Tracking Section for Episodic Series in Collection */}
+              {isEpisodicItem && item.category && (
                 <div className="mt-2 p-3 2xl:p-4 rounded-lg mb-3 border bg-theme-bg/50 border-theme-border">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] 2xl:text-xs font-bold uppercase tracking-wider text-theme-accent">{t('media_card.tracking')}</span>
-                    
+
                     <div className="flex gap-2">
-                        <button 
+                        <button
                         onClick={(e) => {
                             e.stopPropagation();
                             updateItem(item.id, { notificationEnabled: !notificationEnabled });
                         }}
                         className={clsx(
                             "transition-colors",
-                            notificationEnabled 
+                            notificationEnabled
                             ? "text-theme-accent"
                             : "text-theme-subtext"
                         )}
@@ -525,49 +612,64 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                         </button>
                     </div>
                   </div>
-                  
-                  <div className="space-y-2 2xl:space-y-3">
-                    <div className="flex justify-between items-center text-xs 2xl:text-sm">
-                      <span className="text-theme-subtext">{t('media_card.latest')}</span>
-                      <span className="font-medium text-theme-text">
-                        {item.latestUpdateInfo || t('media_card.unknown')}
-                      </span>
+
+                  {/* Episode grid: one button per episode. Click marks
+                      "watched up to here" (this episode and all before it).
+                      Colors adapt to the active theme via theme tokens:
+                      watched = accent, released = surface, unreleased = dimmed.
+                      Collapsed by default; only following works start open. */}
+                  {hasGrid && (
+                    <div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setGridExpanded(!gridExpanded); }}
+                        className="w-full flex items-center justify-between gap-2 text-[10px] text-theme-subtext hover:text-theme-text transition-colors"
+                        title={gridExpanded ? t('media_card.episodes_hide') : t('media_card.episodes_show')}
+                      >
+                        <span className="truncate">{gridSummary}</span>
+                        {gridExpanded ? <ChevronUp className="w-3.5 h-3.5 flex-shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />}
+                      </button>
+                      {gridExpanded && (
+                        <div className="mt-1.5 space-y-2.5">
+                          {blocks.map(block => (
+                            <div key={block.season}>
+                              <div className="text-[10px] text-theme-subtext mb-1">
+                                {seasonBlocks ? `S${block.season} · ` : ''}
+                                {block.windowed ? `${t('media_card.episodes_window', { start: block.start, end: block.end })} · ` : ''}
+                                {seasonBlocks ? epCaptionFor(block.total, block.released) : ''}
+                              </div>
+                              <div className="grid grid-cols-5 gap-1.5">
+                                {block.list.map(n => {
+                                  const isWatched = n <= block.watched;
+                                  const isReleased = n <= block.released;
+                                  return (
+                                    <button
+                                      key={n}
+                                      onClick={(e) => {
+                                          e.stopPropagation();
+                                          markWatched(block, n);
+                                      }}
+                                      className={clsx(
+                                        "py-1 rounded text-[10px] font-medium text-center transition-colors",
+                                        isWatched
+                                          ? "bg-theme-accent text-theme-bg border-theme-accent"
+                                          : isReleased
+                                              ? "bg-theme-surface text-theme-text border-theme-border hover:border-theme-accent"
+                                              : "bg-theme-bg text-theme-subtext border-theme-border opacity-50",
+                                        n === block.watched ? "border-2" : "border"
+                                      )}
+                                      title={t('media_card.episode_mark', { n })}
+                                    >
+                                      {String(n).padStart(2, '0')}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] 2xl:text-xs text-theme-subtext">
-                        {t('media_card.my_progress')}
-                      </label>
-                      <div className="flex items-center gap-1">
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                updateItem(item.id, { userProgress: smartDecrement(item.userProgress || '') });
-                            }}
-                            className="p-1.5 rounded bg-theme-bg border border-theme-border text-theme-subtext hover:text-theme-text hover:border-theme-accent transition-colors"
-                        >
-                            <Minus className="w-3 h-3" />
-                        </button>
-                        <input 
-                            type="text"
-                            value={item.userProgress || ''}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => updateItem(item.id, { userProgress: e.target.value })}
-                            placeholder="e.g. S4E8"
-                            className="flex-1 min-w-0 rounded px-2 py-1 2xl:py-1.5 text-xs 2xl:text-sm border focus:outline-none focus:ring-1 bg-theme-bg border-theme-border text-theme-text focus:border-theme-accent focus:ring-theme-accent/50 text-center"
-                        />
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                updateItem(item.id, { userProgress: smartIncrement(item.userProgress || '') });
-                            }}
-                            className="p-1.5 rounded bg-theme-bg border border-theme-border text-theme-subtext hover:text-theme-text hover:border-theme-accent transition-colors"
-                        >
-                            <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>

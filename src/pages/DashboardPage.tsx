@@ -170,7 +170,7 @@ const YearlyReport: React.FC<{ collection: MediaItem[] }> = ({ collection }) => 
 // Recharts 2.x+ generally supports CSS variables in string props.
 
 export const DashboardPage: React.FC = () => {
-  const { getStats, collection, updateItem } = useCollectionStore();
+  const { getStats, collection, updateItem, bumpToFront } = useCollectionStore();
   const { theme } = useThemeStore();
   const { t } = useTranslation();
   const stats = getStats();
@@ -250,7 +250,14 @@ export const DashboardPage: React.FC = () => {
             <button
                onClick={async () => {
                    if (isCheckingUpdates) return;
-                   const ongoing = collection.filter(item => item.isOngoing && item.notificationEnabled !== false);
+                   // Ongoing items plus a slow resurrection sweep for ended
+                   // episodic works (a "finished" show that starts updating
+                   // again must still be discoverable on a manual check).
+                   const episodicTypes: string[] = ['TV Series', 'Comic', 'Book', 'Short Drama'];
+                   const ongoing = collection.filter(item =>
+                       item.notificationEnabled !== false &&
+                       (item.isOngoing || episodicTypes.includes(item.type))
+                   );
                    if (ongoing.length === 0) {
                        toast.info(t('dashboard.no_ongoing_items'));
                        return;
@@ -268,9 +275,15 @@ export const DashboardPage: React.FC = () => {
                            updateItem(u.id, {
                                latestUpdateInfo: u.latestUpdateInfo,
                                isOngoing: u.isOngoing,
+                               ...(u.totalEpisodes ? { totalEpisodes: u.totalEpisodes } : {}),
+                               ...(u.seasons ? { seasons: u.seasons } : {}),
                                lastCheckedAt: now,
                                hasNewUpdate: changed ? true : original.hasNewUpdate
                            });
+                           // New content floats the work to the front (not a pin).
+                           if (changed && u.isOngoing) {
+                               bumpToFront(u.id);
+                           }
                            if (changed) count++;
                        });
                        if (count > 0) {

@@ -3,7 +3,7 @@ import { searchBangumi } from './bangumiService';
 import { usePluginStore } from '../store/usePluginStore';
 import { PluginExecutor } from './pluginService';
 import OpenAI from "openai";
-import { MediaType, MediaItem, SearchDiagnostics } from "../types/types";
+import { MediaType, MediaItem, SeasonInfo, SearchDiagnostics } from "../types/types";
 import { v4 as uuidv4 } from 'uuid';
 import { useAIStore } from "../store/useAIStore";
 import { useCollectionStore } from "../store/useCollectionStore";
@@ -3321,7 +3321,20 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
 
 let updatesCheckInFlight = false;
 
-export const checkUpdates = async (items: MediaItem[]): Promise<{ id: string; latestUpdateInfo: string; isOngoing: boolean }[]> => {
+export interface UpdateCheckResult {
+  id: string;
+  latestUpdateInfo: string;
+  isOngoing: boolean;
+  // Episode/chapter count of the current season (or whole finished work) when
+  // an authoritative source knows it; drives the episode-grid UI.
+  totalEpisodes?: number;
+  // Structured per-season counts when the source knows them (TMDB seasons):
+  // earlier seasons fully aired, the airing season carries its aired count,
+  // unaired future seasons start at 0.
+  seasons?: SeasonInfo[];
+}
+
+export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResult[]> => {
   // Singleton guard: update checks are triggered from several surfaces
   // (app mount, collection page, dashboard, media card). Never run them
   // concurrently to avoid duplicate AI calls and conflicting writes.
@@ -3339,7 +3352,7 @@ export const checkUpdates = async (items: MediaItem[]): Promise<{ id: string; la
   
   // Batch processing
   const BATCH_SIZE = 5;
-  const allUpdates: { id: string; latestUpdateInfo: string; isOngoing: boolean }[] = [];
+  const allUpdates: UpdateCheckResult[] = [];
   
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
       const batch = items.slice(i, i + BATCH_SIZE);
@@ -3372,7 +3385,7 @@ export const checkUpdates = async (items: MediaItem[]): Promise<{ id: string; la
           return 1 - editDistance(a, b) / maxLen;
       };
 
-      const authoritativeUpdates: { id: string; latestUpdateInfo: string; isOngoing: boolean }[] = [];
+      const authoritativeUpdates: UpdateCheckResult[] = [];
       const pendingForAI: MediaItem[] = [];
       for (const it of batch) {
           if (it.type === MediaType.TV_SERIES && it.tmdbId && it.tmdbMediaType === 'tv') {
@@ -3382,21 +3395,44 @@ export const checkUpdates = async (items: MediaItem[]): Promise<{ id: string; la
                       const status = String(details.status || '').toLowerCase();
                       const last = details.last_episode_to_air;
                       const next = details.next_episode_to_air;
+                      const seasons: SeasonInfo[] = Array.isArray(details.seasons)
+                          ? details.seasons
+                                .filter((s: any) => typeof s.season_number === 'number' && s.season_number > 0 && typeof s.episode_count === 'number' && s.episode_count > 0)
+                                .sort((a: any, b: any) => a.season_number - b.season_number)
+                                .map((s: any) => ({ season: s.season_number as number, total: s.episode_count as number }))
+                          : [];
                       if (last && typeof last.season_number === 'number' && typeof last.episode_number === 'number') {
+                          // Earlier seasons fully aired; the airing season carries
+                          // its aired episode count; unaired future seasons start at 0.
+                          const withAirState = seasons.map(s => {
+                              if (s.season < last.season_number) return s;
+                              if (s.season === last.season_number) return { ...s, released: last.episode_number };
+                              return { ...s, released: 0 };
+                          });
                           const info = formatEp(last.season_number, last.episode_number);
                           const ongoing = status !== 'ended' && status !== 'canceled' && !!next;
-                          authoritativeUpdates.push({ id: it.id, latestUpdateInfo: info, isOngoing: ongoing });
+                          const latestMeta = withAirState.find(s => s.season === last.season_number);
+                          authoritativeUpdates.push({
+                              id: it.id,
+                              latestUpdateInfo: info,
+                              isOngoing: ongoing,
+                              totalEpisodes: latestMeta?.total,
+                              seasons: withAirState.length > 0 ? withAirState : undefined
+                          });
                           continue;
                       }
-                      if (Array.isArray(details.seasons)) {
-                          const seasons = details.seasons.filter((s: any) => typeof s.season_number === 'number' && typeof s.episode_count === 'number');
-                          if (seasons.length > 0) {
-                              const maxSeason = seasons.reduce((a: any, b: any) => (a.season_number > b.season_number ? a : b));
-                              const info = formatEp(maxSeason.season_number, maxSeason.episode_count);
-                              const ongoing = status !== 'ended' && status !== 'canceled';
-                              authoritativeUpdates.push({ id: it.id, latestUpdateInfo: info, isOngoing: ongoing });
-                              continue;
-                          }
+                      if (seasons.length > 0) {
+                          const maxSeason = seasons[seasons.length - 1];
+                          const info = formatEp(maxSeason.season, maxSeason.total);
+                          const ongoing = status !== 'ended' && status !== 'canceled';
+                          authoritativeUpdates.push({
+                              id: it.id,
+                              latestUpdateInfo: info,
+                              isOngoing: ongoing,
+                              totalEpisodes: maxSeason.total,
+                              seasons
+                          });
+                          continue;
                       }
                   }
               } catch {}

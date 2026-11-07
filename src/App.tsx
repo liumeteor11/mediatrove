@@ -48,7 +48,7 @@ const App: React.FC = () => {
     if (!initialized) return;
 
     const refreshUpdates = async () => {
-      const { collection, updateItem } = useCollectionStore.getState();
+      const { collection, updateItem, bumpToFront } = useCollectionStore.getState();
 
       const now = Date.now();
       
@@ -79,9 +79,17 @@ const App: React.FC = () => {
                updateItem(update.id, {
                  latestUpdateInfo: update.latestUpdateInfo,
                  isOngoing: update.isOngoing,
+                 ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
+                 ...(update.seasons ? { seasons: update.seasons } : {}),
                  lastCheckedAt: now,
                  hasNewUpdate: true
                });
+               // New content floats the work to the front of the list (not a
+               // pin). "Just ended" announcements change info but bring nothing
+               // to catch up on, so they don't move.
+               if (update.isOngoing) {
+                 bumpToFront(update.id);
+               }
                updateCount++;
              } else {
                updateItem(update.id, { lastCheckedAt: now });

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useCollectionStore } from '../store/useCollectionStore';
 import { MediaCard } from '../components/MediaCard';
-import { CollectionCategory, MediaItem } from '../types/types';
-import { Filter, Search as SearchIcon, X, Download, Upload, MoreHorizontal, RefreshCw, Plus, Check, ArrowLeft, Edit3 } from 'lucide-react';
+import { CollectionCategory, MediaItem, MediaType } from '../types/types';
+import { Filter, Search as SearchIcon, X, Download, Upload, MoreHorizontal, RefreshCw, Plus, Check, ArrowLeft, Edit3, ChevronDown, Tag } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
@@ -79,8 +79,11 @@ const SortableItem = ({ item, index, onClick, onAction, isSelectionMode, isSelec
 
 export const CollectionPage: React.FC = () => {
   const { t } = useTranslation();
-  const { collection, moveCategory, importCollection, exportCollection, updateItem, reorderCollection, createCollection, updateCollectionMembers } = useCollectionStore();
+  const { collection, moveCategory, importCollection, exportCollection, updateItem, reorderCollection, createCollection, updateCollectionMembers, bumpToFront } = useCollectionStore();
   const [filter, setFilter] = useState<CollectionCategory | 'All'>('All');
+  const [typeFilter, setTypeFilter] = useState<MediaType | 'All'>('All');
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [typeOpen, setTypeOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
@@ -98,6 +101,8 @@ export const CollectionPage: React.FC = () => {
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const menuRef = React.useRef<HTMLDivElement>(null);
+  const statusRef = React.useRef<HTMLDivElement>(null);
+  const typeRef = React.useRef<HTMLDivElement>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -124,10 +129,14 @@ export const CollectionPage: React.FC = () => {
     if (filter !== 'All') {
       base = base.filter((item) => item.category === filter);
     }
-    
+
+    if (typeFilter !== 'All') {
+      base = base.filter((item) => item.type === typeFilter);
+    }
+
     if (searchTerm) {
         const lower = searchTerm.toLowerCase();
-        base = base.filter((item) => 
+        base = base.filter((item) =>
             item.title.toLowerCase().includes(lower)
         );
     }
@@ -141,7 +150,7 @@ export const CollectionPage: React.FC = () => {
     });
 
     return sorted;
-  }, [collection, filter, searchTerm, viewingCollectionId, editMode]);
+  }, [collection, filter, typeFilter, searchTerm, viewingCollectionId, editMode]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -168,7 +177,7 @@ export const CollectionPage: React.FC = () => {
     }
   };
 
-  const isDraggable = filter === 'All' && searchTerm === '' && !selectionMode && !editMode;
+  const isDraggable = filter === 'All' && typeFilter === 'All' && searchTerm === '' && !selectionMode && !editMode;
 
   const handleRefresh = async () => {
       setIsRefreshing(true);
@@ -201,9 +210,16 @@ export const CollectionPage: React.FC = () => {
               }
           }
 
-          // 2. Check for updates on ongoing items
-          const ongoingItems = collection.filter(item => item.isOngoing && item.notificationEnabled !== false);
-          
+          // 2. Check for updates: ongoing items, plus ended episodic works so a
+          // "finished" show that starts updating again stays discoverable via
+          // this manual sweep (resurrection). Automatic startup checks only
+          // cover ongoing items; the manual sweep is the resurrection net.
+          const episodicTypes: string[] = [MediaType.TV_SERIES, MediaType.COMIC, MediaType.BOOK, MediaType.SHORT_DRAMA];
+          const ongoingItems = collection.filter(item =>
+              item.notificationEnabled !== false &&
+              (item.isOngoing || episodicTypes.includes(item.type))
+          );
+
           if (ongoingItems.length > 0) {
              const updates = await checkUpdates(ongoingItems);
              updates.forEach(update => {
@@ -213,9 +229,15 @@ export const CollectionPage: React.FC = () => {
                 updateItem(update.id, {
                   latestUpdateInfo: update.latestUpdateInfo,
                   isOngoing: update.isOngoing,
+                  ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
+                  ...(update.seasons ? { seasons: update.seasons } : {}),
                   lastCheckedAt: now,
                   hasNewUpdate: changed ? true : original.hasNewUpdate
                 });
+                // New content floats the work to the front (not a pin).
+                if (changed && update.isOngoing) {
+                  bumpToFront(update.id);
+                }
                 if (changed) updatedCount++;
              });
           }
@@ -244,6 +266,20 @@ export const CollectionPage: React.FC = () => {
     }
   };
 
+  const getTypeLabel = (type: MediaType | 'All') => {
+    switch (type) {
+        case 'All': return t('collection.filter_all_types', { defaultValue: 'All Types' });
+        case MediaType.MOVIE: return t('search_page.filter_movies');
+        case MediaType.TV_SERIES: return t('search_page.filter_tv');
+        case MediaType.BOOK: return t('search_page.filter_books');
+        case MediaType.COMIC: return t('search_page.filter_comics');
+        case MediaType.SHORT_DRAMA: return t('search_page.filter_short_dramas');
+        case MediaType.MUSIC: return t('search_page.filter_music');
+        case MediaType.OTHER: return t('search_page.filter_other');
+        default: return String(type);
+    }
+  };
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -257,12 +293,20 @@ export const CollectionPage: React.FC = () => {
              setSelectedId(null);
              setShowMenu(false);
         }
+        setStatusOpen(false);
+        setTypeOpen(false);
       }
     };
-    
+
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setShowMenu(false);
+      }
+      if (statusRef.current && !statusRef.current.contains(e.target as Node)) {
+        setStatusOpen(false);
+      }
+      if (typeRef.current && !typeRef.current.contains(e.target as Node)) {
+        setTypeOpen(false);
       }
     };
 
@@ -526,21 +570,80 @@ export const CollectionPage: React.FC = () => {
                     <Plus className="w-5 h-5" />
                 </button>
 
-                <div className="flex gap-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar">
-                    {(['All', ...Object.values(CollectionCategory)] as const).map((cat) => (
+                <div className="flex gap-2 items-center">
+                    {/* Status filter dropdown: All / Favorites / To Watch / Watched */}
+                    <div className="relative" ref={statusRef}>
                         <button
-                            key={cat}
-                            onClick={() => setFilter(cat)}
+                            onClick={() => { setStatusOpen(!statusOpen); setTypeOpen(false); }}
                             className={clsx(
-                              "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors",
-                              filter === cat 
+                              "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors flex items-center gap-2",
+                              (filter !== 'All' || statusOpen)
                                 ? "bg-theme-accent text-theme-bg"
                                 : "bg-theme-surface border border-theme-border text-theme-text hover:bg-theme-bg"
                             )}
+                            title={t('collection.filter_status_tooltip', { defaultValue: 'Filter by status' })}
                         >
-                            {getCategoryLabel(cat)}
+                            <Filter className="w-4 h-4" />
+                            {getCategoryLabel(filter)}
+                            <ChevronDown className={clsx("w-4 h-4 transition-transform", statusOpen && "rotate-180")} />
                         </button>
-                    ))}
+                        {statusOpen && (
+                            <div className="absolute right-0 sm:left-0 top-full mt-2 w-36 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50 overflow-hidden">
+                                {(['All', ...Object.values(CollectionCategory)] as const).map((cat) => (
+                                    <button
+                                        key={cat}
+                                        onClick={() => { setFilter(cat); setStatusOpen(false); }}
+                                        className={clsx(
+                                          "w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2",
+                                          filter === cat
+                                            ? "text-theme-accent bg-theme-bg"
+                                            : "text-theme-text hover:bg-theme-bg"
+                                        )}
+                                    >
+                                        {getCategoryLabel(cat)}
+                                        {filter === cat && <Check className="w-4 h-4 flex-shrink-0" />}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Type filter dropdown: Movie / TV Series / Book / ... */}
+                    <div className="relative" ref={typeRef}>
+                        <button
+                            onClick={() => { setTypeOpen(!typeOpen); setStatusOpen(false); }}
+                            className={clsx(
+                              "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors flex items-center gap-2",
+                              (typeFilter !== 'All' || typeOpen)
+                                ? "bg-theme-accent text-theme-bg"
+                                : "bg-theme-surface border border-theme-border text-theme-text hover:bg-theme-bg"
+                            )}
+                            title={t('collection.filter_type_tooltip', { defaultValue: 'Filter by type' })}
+                        >
+                            <Tag className="w-4 h-4" />
+                            {getTypeLabel(typeFilter)}
+                            <ChevronDown className={clsx("w-4 h-4 transition-transform", typeOpen && "rotate-180")} />
+                        </button>
+                        {typeOpen && (
+                            <div className="absolute right-0 sm:left-0 top-full mt-2 w-36 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50 overflow-hidden max-h-80 overflow-y-auto">
+                                {(['All', ...Object.values(MediaType)] as const).map((type) => (
+                                    <button
+                                        key={type}
+                                        onClick={() => { setTypeFilter(type); setTypeOpen(false); }}
+                                        className={clsx(
+                                          "w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2",
+                                          typeFilter === type
+                                            ? "text-theme-accent bg-theme-bg"
+                                            : "text-theme-text hover:bg-theme-bg"
+                                        )}
+                                    >
+                                        {getTypeLabel(type)}
+                                        {typeFilter === type && <Check className="w-4 h-4 flex-shrink-0" />}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
                 
                 <div className="flex gap-2 items-center border-l border-theme-border pl-4 relative" ref={menuRef}>
