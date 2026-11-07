@@ -26,11 +26,27 @@ use mcp::McpState;
 
 const SEARCH_CACHE_TTL_MS: u64 = 2 * 60 * 60 * 1000;
 const SEARCH_CACHE_MAX_ENTRIES: usize = 512;
+const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 #[derive(Clone)]
 struct SearchCacheEntry {
     ts_ms: u64,
     payload: String,
+}
+
+fn search_cache_ttl_ms(payload: &str) -> u64 {
+    // Empty result sets expire quickly so a transient provider outage (or a
+    // query that legitimately has no hits) is retried soon instead of being
+    // pinned for the full TTL.
+    const EMPTY_TTL_MS: u64 = 5 * 60 * 1000;
+    let is_empty = serde_json::from_str::<Vec<serde_json::Value>>(payload)
+        .map(|v| v.is_empty())
+        .unwrap_or(false);
+    if is_empty {
+        EMPTY_TTL_MS
+    } else {
+        SEARCH_CACHE_TTL_MS
+    }
 }
 
 struct AppState {
@@ -476,26 +492,17 @@ async fn yandex_search(client: &Client, query: &str, user: &str, api_key: &str) 
     Ok(results)
 }
 
-async fn duckduckgo_search(client: &Client, query: &str) -> Result<Vec<SearchResultItem>, Box<dyn Error + Send + Sync>> {
-    // Try API first (Instant Answer)
-    let url = format!(
-        "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
-        urlencoding::encode(query)
-    );
-    let fut = client.get(&url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .send();
-    let resp = tokio::time::timeout(std::time::Duration::from_secs(8), fut)
-        .await??
-        .json::<Value>()
-        .await?;
-
+fn parse_duckduckgo_ia(resp: &Value) -> Vec<SearchResultItem> {
     let mut results = Vec::new();
-    if let (Some(abstract_text), Some(abstract_url)) = (
-        resp["AbstractText"].as_str(),
-        resp["AbstractURL"].as_str(),
-    ) {
-        let title = resp["Heading"].as_str().unwrap_or(abstract_text).to_string();
+    // The Instant Answer API returns empty strings (not nulls) for unknown
+    // queries; only treat a non-empty abstract as a usable result, otherwise
+    // an all-empty placeholder item would be pushed and poison both the
+    // results and the search cache.
+    let abstract_text = resp["AbstractText"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let abstract_url = resp["AbstractURL"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    if let (Some(abstract_text), Some(abstract_url)) = (abstract_text, abstract_url) {
+        let heading = resp["Heading"].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let title = heading.unwrap_or(abstract_text).to_string();
         results.push(SearchResultItem {
             title,
             snippet: abstract_text.to_string(),
@@ -520,6 +527,24 @@ async fn duckduckgo_search(client: &Client, query: &str) -> Result<Vec<SearchRes
             }
         }
     }
+    results
+}
+
+async fn duckduckgo_search(client: &Client, query: &str) -> Result<Vec<SearchResultItem>, Box<dyn Error + Send + Sync>> {
+    // Try API first (Instant Answer)
+    let url = format!(
+        "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
+        urlencoding::encode(query)
+    );
+    let fut = client.get(&url)
+        .header("User-Agent", BROWSER_UA)
+        .send();
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(8), fut)
+        .await??
+        .json::<Value>()
+        .await?;
+
+    let mut results = parse_duckduckgo_ia(&resp);
 
     let need_html = results.is_empty() || query.to_ascii_lowercase().contains("site:");
     if need_html {
@@ -533,6 +558,7 @@ async fn duckduckgo_search(client: &Client, query: &str) -> Result<Vec<SearchRes
         }
     }
 
+    results.retain(|r| !r.link.trim().is_empty());
     Ok(results)
 }
 
@@ -599,7 +625,7 @@ async fn duckduckgo_html_search(client: &Client, query: &str) -> Result<Vec<Sear
         urlencoding::encode(query)
     );
     let fut = client.get(&url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("User-Agent", BROWSER_UA)
         .header("Accept-Language", "en-US,en;q=0.9")
         .header("Referer", "https://html.duckduckgo.com/")
         .send();
@@ -700,6 +726,18 @@ fn resolve_url(base: &str, v: &str) -> String {
     s.to_string()
 }
 
+fn douban_request_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER, USER_AGENT};
+    // Douban serves 403/418 anti-crawler pages to non-browser agents; mimic a
+    // real browser request closely enough to fetch the public pages.
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(BROWSER_UA));
+    headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"));
+    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"));
+    headers.insert(REFERER, HeaderValue::from_static("https://movie.douban.com/"));
+    headers
+}
+
 #[command]
 async fn douban_cover(title: String, _kind: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
     let q = urlencoding::encode(&title);
@@ -738,13 +776,17 @@ async fn douban_cover(title: String, _kind: Option<String>, state: State<'_, App
         }
         None
     }
+    let headers = douban_request_headers();
     // 1) Fetch search page(s) using direct client (domestic)
     let mut subject_url: Option<String> = None;
     for u in urls {
         if subject_url.is_some() { break; }
-        let fut = state.direct_client.get(&u).send();
+        let fut = state.direct_client.get(&u).headers(headers.clone()).send();
         let res = tokio::time::timeout(std::time::Duration::from_secs(8), fut).await;
         if let Ok(Ok(resp)) = res {
+            // A non-2xx anti-crawler page carries no usable results; try the
+            // next search URL instead of parsing it as "no results".
+            if !resp.status().is_success() { continue; }
             if let Ok(text) = resp.text().await {
                 if let Some(su) = find_subject_url(&text) {
                     subject_url = Some(su);
@@ -755,16 +797,25 @@ async fn douban_cover(title: String, _kind: Option<String>, state: State<'_, App
     }
     // 2) Fetch subject page and extract og:image
     if let Some(su) = subject_url {
-        let fut = state.direct_client.get(&su).send();
+        let fut = state.direct_client.get(&su).headers(headers).send();
+        let mut status_code: Option<u16> = None;
         if let Ok(Ok(resp)) = tokio::time::timeout(std::time::Duration::from_secs(8), fut).await {
-            if let Ok(text) = resp.text().await {
-                if let Some(img) = find_og_image(&text) {
-                    let body = serde_json::json!({ "ok": true, "url": su, "image": img }).to_string();
-                    return Ok(body);
+            status_code = Some(resp.status().as_u16());
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await {
+                    if let Some(img) = find_og_image(&text) {
+                        let body = serde_json::json!({ "ok": true, "url": su, "image": img }).to_string();
+                        return Ok(body);
+                    }
                 }
             }
         }
-        let body = serde_json::json!({ "ok": false, "url": su }).to_string();
+        // Surface the HTTP status (when known) so failures are diagnosable
+        // from the frontend I/O logs.
+        let body = match status_code {
+            Some(s) => serde_json::json!({ "ok": false, "url": su, "status": s }).to_string(),
+            None => serde_json::json!({ "ok": false, "url": su }).to_string(),
+        };
         return Ok(body);
     }
     Ok(serde_json::json!({ "ok": false }).to_string())
@@ -893,7 +944,7 @@ async fn web_search(query: String, config: SearchConfig, state: State<'_, AppSta
     {
         let guard = state.search_cache.read().await;
         if let Some(hit) = guard.get(&cache_key) {
-            if now_ms.saturating_sub(hit.ts_ms) <= SEARCH_CACHE_TTL_MS {
+            if now_ms.saturating_sub(hit.ts_ms) <= search_cache_ttl_ms(&hit.payload) {
                 return Ok(hit.payload.clone());
             }
         }

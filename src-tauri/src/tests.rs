@@ -78,7 +78,69 @@ fn test_duckduckgo_parsing() {
     
     // Check uddg decoding
     assert_eq!(results[1].title, "Redirected Link");
-    assert_eq!(results[1].link, "https://other.com/foo"); 
+    assert_eq!(results[1].link, "https://other.com/foo");
+}
+
+#[test]
+fn test_duckduckgo_ia_empty_abstract_filtered() {
+    // The Instant Answer API returns empty strings (not nulls) for unknown
+    // queries; those must not produce an all-empty placeholder item.
+    let empty = serde_json::json!({
+        "AbstractText": "",
+        "AbstractURL": "",
+        "Heading": "",
+        "RelatedTopics": []
+    });
+    let results = crate::parse_duckduckgo_ia(&empty);
+    assert!(results.is_empty(), "empty abstract strings must yield no results");
+
+    // A real abstract plus related topics parse as before.
+    let body = serde_json::json!({
+        "AbstractText": "Inception is a 2010 film.",
+        "AbstractURL": "https://example.com/inception",
+        "Heading": "Inception",
+        "RelatedTopics": [
+            { "Text": "Related topic one", "FirstURL": "https://example.com/one" },
+            { "Text": "", "FirstURL": "https://example.com/empty-text" }
+        ]
+    });
+    let results = crate::parse_duckduckgo_ia(&body);
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].title, "Inception");
+    assert_eq!(results[0].link, "https://example.com/inception");
+    assert_eq!(results[0].snippet, "Inception is a 2010 film.");
+    assert_eq!(results[1].link, "https://example.com/one");
+}
+
+#[test]
+fn test_search_cache_ttl_empty_payload() {
+    // Empty result sets must expire on the short TTL so transient outages
+    // get retried soon; non-empty payloads keep the full TTL.
+    let empty = serde_json::to_string(&Vec::<crate::SearchResultItem>::new()).unwrap();
+    assert_eq!(crate::search_cache_ttl_ms(&empty), 5 * 60 * 1000);
+    assert_eq!(crate::search_cache_ttl_ms("[]"), 5 * 60 * 1000);
+
+    let non_empty = serde_json::to_string(&[crate::SearchResultItem {
+        title: "t".to_string(),
+        snippet: "s".to_string(),
+        link: "https://example.com".to_string(),
+        image: None,
+        metadata: None,
+    }]).unwrap();
+    assert_eq!(crate::search_cache_ttl_ms(&non_empty), crate::SEARCH_CACHE_TTL_MS);
+    // Malformed payloads fall back to the full TTL rather than panicking.
+    assert_eq!(crate::search_cache_ttl_ms("not json"), crate::SEARCH_CACHE_TTL_MS);
+}
+
+#[test]
+fn test_douban_request_headers() {
+    let headers = crate::douban_request_headers();
+    let ua = headers.get(reqwest::header::USER_AGENT).expect("UA header").to_str().unwrap();
+    assert!(ua.starts_with("Mozilla/5.0"), "douban requests must use a browser UA, got: {}", ua);
+    let lang = headers.get(reqwest::header::ACCEPT_LANGUAGE).expect("Accept-Language header").to_str().unwrap();
+    assert!(lang.starts_with("zh-CN"), "douban requests must prefer Chinese, got: {}", lang);
+    assert!(headers.get(reqwest::header::REFERER).is_some());
+    assert!(headers.get(reqwest::header::ACCEPT).is_some());
 }
 
 #[test]
