@@ -140,6 +140,8 @@
     "search_provider_vertex": "Vertex AI Search (Google)",
     "search_provider_serper": "Serper API (Google)",
     "search_provider_yandex": "Yandex Search",
+    "search_provider_deepseek": "DeepSeek Search",
+    "deepseek_search_hint": "Uses DeepSeek's in-house search engine (Search API). It shares the DeepSeek API key from the AI provider above — set the AI provider to DeepSeek; no separate key needed. Billed at ~¥5 per 1,000 successful requests.",
     "search_quota_exceeded": "Search quota exceeded (429). Please check the current search engine key's billing/quota.",
     "serper_api_key": "Serper API Key",
     "serper_key_label": "Serper API Key",

@@ -29,6 +29,7 @@ export const AIConfigPanel: React.FC = () => {
     { value: 'vertex', label: t('ai_config.search_provider_vertex') },
     { value: 'serper', label: t('ai_config.search_provider_serper') },
     { value: 'yandex', label: t('ai_config.search_provider_yandex') },
+    { value: 'deepseek', label: t('ai_config.search_provider_deepseek') },
     { value: 'duckduckgo', label: t('ai_config.search_provider_duckduckgo') },
   ];
 
@@ -391,6 +392,88 @@ export const AIConfigPanel: React.FC = () => {
               </div>
             )}
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.model_name_label')}</label>
+            <div className="relative">
+               {showInput ? (
+                 <div className="flex gap-2">
+                   <input 
+                     type="text" 
+                     value={model} 
+                     onChange={(e) => setConfig({ model: e.target.value })}
+                     className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                     placeholder={provider === 'custom' ? t('ai_config.enter_model_name') : t('ai_config.enter_custom_model_name')}
+                   />
+                   {provider !== 'custom' && (
+                     <button
+                        onClick={() => {
+                            setIsManualInput(false);
+                            // If current model is not in list, revert to default
+                            if (!availableModels.some(m => m.name === model)) {
+                                 setConfig({ model: availableModels[0]?.name || '' });
+                            }
+                        }}
+                        className="px-3 py-2 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-bg text-theme-subtext transition-colors"
+                        title={t('ai_config.switch_to_list')}
+                     >
+                        <List className="w-4 h-4" />
+                     </button>
+                   )}
+                 </div>
+               ) : (
+                 <select 
+                   value={model} 
+                   onChange={(e) => {
+                       if (e.target.value === '__manual__') {
+                           setIsManualInput(true);
+                       } else {
+                           setConfig({ model: e.target.value });
+                       }
+                   }}
+                   className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                 >
+                   {availableModels.map(m => (
+                     <option key={m.name} value={m.name} className={m.deprecated ? 'text-theme-subtext/50' : ''}>
+                       {m.name} ({m.version} - {m.releaseDate}){m.deprecated ? ' ⚠' : ''}
+                     </option>
+                   ))}
+                   <option value="__manual__" className="text-theme-accent font-medium bg-theme-surface">
+                       {t('ai_config.manual_input')}
+                   </option>
+                 </select>
+               )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.max_tokens')}</label>
+            <input 
+              type="number" 
+              value={maxTokens}
+              onChange={(e) => setConfig({ maxTokens: parseInt(e.target.value) })}
+              className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <a 
+                href={
+                    provider === 'moonshot' ? 'https://platform.moonshot.cn/docs' :
+                    provider === 'openai' ? 'https://platform.openai.com/docs' :
+                    provider === 'deepseek' ? 'https://api-docs.deepseek.com/' :
+                    provider === 'qwen' ? 'https://help.aliyun.com/zh/model-studio/developer-reference/use-compatible-text-generation-interfaces' :
+                    provider === 'google' ? 'https://ai.google.dev/gemini-api/docs/openai' :
+                    provider === 'mistral' ? 'https://docs.mistral.ai/' :
+                    '#'
+                } 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="text-xs text-theme-accent hover:underline"
+            >
+                {t('ai_config.view_api_docs')}
+            </a>
+          </div>
         </div>
 
         {/* Right Column */}
@@ -600,25 +683,6 @@ export const AIConfigPanel: React.FC = () => {
                 )}
             </div>
           </div>
-
-          <div className="flex justify-end">
-            <a 
-                href={
-                    provider === 'moonshot' ? 'https://platform.moonshot.cn/docs' :
-                    provider === 'openai' ? 'https://platform.openai.com/docs' :
-                    provider === 'deepseek' ? 'https://api-docs.deepseek.com/' :
-                    provider === 'qwen' ? 'https://help.aliyun.com/zh/model-studio/developer-reference/use-compatible-text-generation-interfaces' :
-                    provider === 'google' ? 'https://ai.google.dev/gemini-api/docs/openai' :
-                    provider === 'mistral' ? 'https://docs.mistral.ai/' :
-                    '#'
-                } 
-                target="_blank" 
-                rel="noopener noreferrer" 
-                className="text-xs text-theme-accent hover:underline"
-            >
-                {t('ai_config.view_api_docs')}
-            </a>
-          </div>
         </div>
       </div>
 
@@ -769,6 +833,20 @@ export const AIConfigPanel: React.FC = () => {
                     </div>
                 )}
 
+                {/* DeepSeek Search Configuration — shares the chat API key */}
+                {searchProvider === 'deepseek' && (
+                    <div>
+                        <p className="text-xs text-theme-subtext/80 italic">
+                            {t('ai_config.deepseek_search_hint')}
+                        </p>
+                        <div className="flex justify-end items-center mt-1">
+                            <button onClick={handleTestSearch} disabled={isSearchTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50">
+                                {isSearchTesting ? 'Testing...' : t('ai_config.test_connection_btn')}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Yandex Configuration */}
                 {searchProvider === 'yandex' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -834,6 +912,99 @@ export const AIConfigPanel: React.FC = () => {
 
             </div>
           )}
+
+        {/* Proxy Settings */}
+        <div className="mt-4 border-t border-theme-border pt-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-theme-text">{t('ai_config.use_system_proxy')}</label>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={localUseSystemProxy} 
+                    onChange={(e) => setLocalUseSystemProxy(e.target.checked)} 
+                    className="sr-only peer" 
+                  />
+                  <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={handleTestProxy}
+                  disabled={isTesting}
+                  className="px-3 py-2 rounded-lg text-sm font-medium border-2 border-theme-accent bg-theme-surface hover:bg-theme-bg text-theme-text disabled:opacity-50"
+                >
+                  {isTesting ? t('ai_config.testing_proxy') : t('ai_config.test_proxy')}
+                </button>
+              </div>
+              {!localUseSystemProxy && (
+                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_protocol')}</label>
+                    <select 
+                      value={localProxyProtocol}
+                      onChange={(e) => setLocalProxyProtocol(e.target.value as 'http' | 'socks5')}
+                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                    >
+                      <option value="http">HTTP</option>
+                      <option value="socks5">SOCKS5</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_host')}</label>
+                    <input 
+                      type="text" 
+                      value={localProxyHost}
+                      onChange={(e) => setLocalProxyHost(e.target.value)}
+                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      placeholder="127.0.0.1"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_port')}</label>
+                    <input 
+                      type="text" 
+                      value={localProxyPort}
+                      onChange={(e) => setLocalProxyPort(e.target.value)}
+                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      placeholder="7890"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_username')}</label>
+                    <input 
+                      type="text" 
+                      value={localProxyUsername}
+                      onChange={(e) => setLocalProxyUsername(e.target.value)}
+                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      placeholder=""
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_password')}</label>
+                    <input 
+                      type="password" 
+                      value={localProxyPassword}
+                      onChange={(e) => setLocalProxyPassword(e.target.value)}
+                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      placeholder=""
+                    />
+                  </div>
+                  <div className="md:col-span-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setIsProxyHelpOpen(true)}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border-2 border-theme-accent bg-theme-surface hover:bg-theme-bg text-theme-text"
+                    >
+                      <Info className="w-4 h-4" />
+                      {t('ai_config.proxy_help_btn')}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Metadata Sources */}
@@ -986,98 +1157,6 @@ export const AIConfigPanel: React.FC = () => {
                   </div>
               </div>
 
-        {/* Proxy Settings */}
-        <div className="xl:col-span-2">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-theme-text">{t('ai_config.use_system_proxy')}</label>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={localUseSystemProxy} 
-                    onChange={(e) => setLocalUseSystemProxy(e.target.checked)} 
-                    className="sr-only peer" 
-                  />
-                  <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
-                </label>
-              </div>
-              <div className="flex items-center justify-end">
-                <button
-                  type="button"
-                  onClick={handleTestProxy}
-                  disabled={isTesting}
-                  className="px-3 py-2 rounded-lg text-sm font-medium border-2 border-theme-accent bg-theme-surface hover:bg-theme-bg text-theme-text disabled:opacity-50"
-                >
-                  {isTesting ? t('ai_config.testing_proxy') : t('ai_config.test_proxy')}
-                </button>
-              </div>
-              {!localUseSystemProxy && (
-                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_protocol')}</label>
-                    <select 
-                      value={localProxyProtocol}
-                      onChange={(e) => setLocalProxyProtocol(e.target.value as 'http' | 'socks5')}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                    >
-                      <option value="http">HTTP</option>
-                      <option value="socks5">SOCKS5</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_host')}</label>
-                    <input 
-                      type="text" 
-                      value={localProxyHost}
-                      onChange={(e) => setLocalProxyHost(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                      placeholder="127.0.0.1"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_port')}</label>
-                    <input 
-                      type="text" 
-                      value={localProxyPort}
-                      onChange={(e) => setLocalProxyPort(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                      placeholder="7890"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_username')}</label>
-                    <input 
-                      type="text" 
-                      value={localProxyUsername}
-                      onChange={(e) => setLocalProxyUsername(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                      placeholder=""
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.proxy_password')}</label>
-                    <input 
-                      type="password" 
-                      value={localProxyPassword}
-                      onChange={(e) => setLocalProxyPassword(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                      placeholder=""
-                    />
-                  </div>
-                  <div className="md:col-span-2 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => setIsProxyHelpOpen(true)}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border-2 border-theme-accent bg-theme-surface hover:bg-theme-bg text-theme-text"
-                    >
-                      <Info className="w-4 h-4" />
-                      {t('ai_config.proxy_help_btn')}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       </div>
 

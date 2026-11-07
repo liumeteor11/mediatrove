@@ -1,4 +1,4 @@
-use tauri::{command, State, Manager};
+use tauri::{command, AppHandle, State, Manager};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -344,6 +344,55 @@ async fn serper_search(client: &Client, query: &str, api_key: &str, search_type:
                 link,
                 image: None,
                 metadata: Some(Value::Object(metadata)),
+            });
+        }
+    }
+    Ok(results)
+}
+
+/// DeepSeek's standalone Search API (docs 2026-10): POST /v1/tools/search,
+/// Bearer-authenticated with the same key as the chat API, backed by their
+/// in-house engine. Results come back ranked (rerank_score); the query is
+/// capped at 128 chars by the provider.
+async fn deepseek_search(client: &Client, query: &str, api_key: &str) -> Result<Vec<SearchResultItem>, Box<dyn Error + Send + Sync>> {
+    let q: String = query.chars().take(128).collect();
+    let fut = client
+        .post("https://api.deepseek.com/v1/tools/search")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "query": q, "count": 8 }))
+        .send();
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(30), fut)
+        .await??;
+
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err("DeepSeek Search Quota Exceeded (429). Please check your API key billing/quota.".into());
+    }
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("DeepSeek Search API Error ({}): {}", status, text).into());
+    }
+
+    let resp = resp.json::<Value>().await?;
+    let mut results = Vec::new();
+    if let Some(items) = resp["results"].as_array() {
+        for item in items {
+            let title = item["title"].as_str().unwrap_or("").to_string();
+            let link = item["url"].as_str().unwrap_or("").to_string();
+            let snippet = item["snippet"].as_str()
+                .or_else(|| item["summary"].as_str())
+                .unwrap_or("")
+                .to_string();
+            if title.is_empty() && link.is_empty() {
+                continue;
+            }
+            results.push(SearchResultItem {
+                title,
+                snippet,
+                link,
+                image: None,
+                metadata: None,
             });
         }
     }
@@ -904,6 +953,19 @@ async fn web_search(query: String, config: SearchConfig, state: State<'_, AppSta
                 duckduckgo_search(client, &query).await.map_err(|e| e.to_string())
             }
         },
+        "deepseek" => {
+            if search_type == Some("image") {
+                // The Search API is text-only; poster lookups fall through.
+                Ok(Vec::new())
+            } else if api_keys.is_empty() {
+                duckduckgo_search(client, &query).await.map_err(|e| e.to_string())
+            } else {
+                search_with_key_rotation(api_keys.clone(), |key| {
+                    let q = query.as_str();
+                    async move { deepseek_search(client, q, &key).await.map_err(|e| e.to_string()) }
+                }).await
+            }
+        },
         "duckduckgo" => duckduckgo_search(client, &query).await.map_err(|e| e.to_string()),
         _ => Err("Unsupported search provider".into()),
     };
@@ -976,6 +1038,11 @@ async fn test_search_provider(config: SearchConfig, state: State<'_, AppState>) 
             if let (Some(key), Some(user)) = (&config.api_key, &config.user) {
                 yandex_search(&state.direct_client, q, user, key).await
             } else { Err("Missing Yandex API Key or User".into()) }
+        },
+        "deepseek" => {
+            if let Some(key) = &config.api_key {
+                deepseek_search(client, q, key).await
+            } else { Err("Missing DeepSeek API Key".into()) }
         },
         _ => Err("Unsupported search provider".into()),
     };
@@ -1397,6 +1464,38 @@ async fn test_proxy(config: ProxyTestConfig, state: State<'_, AppState>) -> Resu
         "url": url,
     });
     Ok(body.to_string())
+}
+
+// --- AI IO log persistence -------------------------------------------------
+// The frontend keeps AI/search IO logs in memory only (200 entries, lost on
+// restart). It mirrors every entry here as JSONL so runs can be diagnosed
+// post-mortem from <app_data_dir>/logs/ai_io.jsonl (one .1 backup on rotation).
+
+const IO_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+const IO_LOG_FILE: &str = "ai_io.jsonl";
+
+pub fn append_io_log_line(dir: &std::path::Path, line: &str, max_bytes: u64) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(IO_LOG_FILE);
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > max_bytes {
+            let _ = std::fs::rename(&path, dir.join(format!("{}.1", IO_LOG_FILE)));
+        }
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    use std::io::Write;
+    f.write_all(line.as_bytes())?;
+    f.write_all(b"\n")?;
+    Ok(())
+}
+
+#[command]
+fn append_io_log(entry: String, app_handle: AppHandle) -> Result<(), String> {
+    // Re-serialize through serde: the file stays strictly one-JSON-per-line
+    // even if a caller ever sends something malformed.
+    let value: Value = serde_json::from_str(&entry).map_err(|e| format!("invalid io log entry: {}", e))?;
+    let dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?.join("logs");
+    append_io_log_line(&dir, &value.to_string(), IO_LOG_MAX_BYTES).map_err(|e| e.to_string())
 }
 
 // --- Database Commands ---
@@ -1822,6 +1921,7 @@ pub fn run() {
             test_search_provider,
             test_omdb,
             save_ai_config,
+            append_io_log,
             save_theme_config,
             get_app_configs,
             get_collection,

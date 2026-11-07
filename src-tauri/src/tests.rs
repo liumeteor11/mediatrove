@@ -559,3 +559,28 @@ async fn test_mcp_http_protocol_roundtrip() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn test_io_log_append_and_rotate() {
+    let dir = std::env::temp_dir().join(format!("mediatrove_io_log_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Appends accumulate as JSONL lines in the target directory.
+    crate::append_io_log_line(&dir, "{\"n\":1}", 10_000).unwrap();
+    crate::append_io_log_line(&dir, "{\"n\":2}", 10_000).unwrap();
+    let content = std::fs::read_to_string(dir.join("ai_io.jsonl")).unwrap();
+    assert_eq!(content.lines().count(), 2);
+    assert!(content.contains("{\"n\":1}"));
+    assert!(content.contains("{\"n\":2}"));
+
+    // A line that would push the file past the cap rotates it to .1 first,
+    // then the fresh file holds only the new line.
+    crate::append_io_log_line(&dir, "{\"n\":3}", 10).unwrap();
+    let rotated = std::fs::read_to_string(dir.join("ai_io.jsonl.1")).unwrap();
+    assert_eq!(rotated.lines().count(), 2);
+    let fresh = std::fs::read_to_string(dir.join("ai_io.jsonl")).unwrap();
+    assert_eq!(fresh.lines().count(), 1);
+    assert!(fresh.contains("{\"n\":3}"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

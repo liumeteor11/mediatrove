@@ -50,7 +50,10 @@ export const PROVIDER_DEFAULTS: Record<string, ProviderDefaults> = {
   qwen: { nativeSearch: false, reasoningLevels: ['off', 'auto', 'high'], maxTokensParam: 'max_tokens' },
   google: { nativeSearch: false, reasoningLevels: ['off', 'auto'], maxTokensParam: 'max_tokens' },
   mistral: { nativeSearch: false, reasoningLevels: ['off', 'auto'], maxTokensParam: 'max_tokens' },
-  mimo: { nativeSearch: false, reasoningLevels: ['off', 'low', 'medium', 'high', 'auto'], maxTokensParam: 'max_tokens' },
+  // MiMo V2.6 runs web search server-side via a native "web_search" tool
+  // (docs 2026-10): results come back as url_citation annotations with no
+  // client tool round-trip. Requires the Web Search plugin in the MiMo console.
+  mimo: { nativeSearch: true, reasoningLevels: ['off', 'low', 'medium', 'high', 'auto'], maxTokensParam: 'max_tokens' },
   zhipu: { nativeSearch: true, reasoningLevels: ['off', 'auto', 'high', 'max'], maxTokensParam: 'max_tokens' },
   custom: { nativeSearch: false, reasoningLevels: ['off', 'auto'], maxTokensParam: 'max_tokens' },
 };
@@ -116,9 +119,10 @@ export const MODEL_CATALOG: Record<AIProvider, CatalogModel[]> = {
     // none/low/medium/high (verified against the live API).
     { name: 'mimo-v2.6-pro', version: 'MiMo V2.6 Pro', releaseDate: '2026-09' },
     { name: 'mimo-v2.6-flash', version: 'MiMo V2.6 Flash', releaseDate: '2026-09' },
-    { name: 'mimo-v2.5-pro', version: 'MiMo V2.5 Pro (Sunset 2026-10-21)', releaseDate: '2026-05', deprecated: true },
-    { name: 'mimo-v2.5-pro-ultraspeed', version: 'MiMo V2.5 Pro UltraSpeed (Sunset 2026-10-21)', releaseDate: '2026-06', deprecated: true },
-    { name: 'mimo-v2.5', version: 'MiMo V2.5 (Sunset 2026-10-21)', releaseDate: '2026-05', deprecated: true }
+    // V2.5 predates the web_search plugin — keep them on external search.
+    { name: 'mimo-v2.5-pro', version: 'MiMo V2.5 Pro (Sunset 2026-10-21)', releaseDate: '2026-05', deprecated: true, nativeSearch: false },
+    { name: 'mimo-v2.5-pro-ultraspeed', version: 'MiMo V2.5 Pro UltraSpeed (Sunset 2026-10-21)', releaseDate: '2026-06', deprecated: true, nativeSearch: false },
+    { name: 'mimo-v2.5', version: 'MiMo V2.5 (Sunset 2026-10-21)', releaseDate: '2026-05', deprecated: true, nativeSearch: false }
   ],
   zhipu: [
     // GLM-5.2+ support reasoning_effort; older GLM models use thinking.type.
@@ -149,8 +153,12 @@ export function getModelCapabilities(provider: AIProvider, model?: string | null
   };
 }
 
-/** Native search tools for providers that implement it as a chat-completions tool. */
-export function getNativeSearchTools(provider: AIProvider): any[] {
+/**
+ * Native search tools for providers that implement it as a chat-completions
+ * tool. `force` marks flows that demand grounding (e.g. trending), where the
+ * model must not skip the search.
+ */
+export function getNativeSearchTools(provider: AIProvider, opts?: { force?: boolean }): any[] {
   if (provider === 'openai') {
     return [{ type: 'web_search' }];
   }
@@ -159,6 +167,12 @@ export function getNativeSearchTools(provider: AIProvider): any[] {
       type: 'web_search',
       web_search: { enable: 'True', search_engine: 'search_pro', search_result: 'True', count: '5' }
     }];
+  }
+  if (provider === 'mimo') {
+    // Server-executed (docs 2026-10): no tool_calls round-trip, results arrive
+    // as url_citation annotations. force_search stops the model from skipping
+    // the search; without it the model decides (cheaper for regular chats).
+    return [{ type: 'web_search', max_keyword: 3, force_search: !!opts?.force }];
   }
   return [];
 }

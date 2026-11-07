@@ -140,6 +140,8 @@
     "search_provider_vertex": "Vertex AI Search (Google)",
     "search_provider_serper": "Serper API (Google)",
     "search_provider_yandex": "Yandex 搜索",
+    "search_provider_deepseek": "DeepSeek 搜索",
+    "deepseek_search_hint": "使用 DeepSeek 自研搜索引擎（Search API）。与 AI 服务商共用同一个 DeepSeek API Key，无需单独填写；请将上方 AI 服务商设为 DeepSeek。计费约 ¥5/千次成功请求。",
     "search_quota_exceeded": "搜索配额已用尽（429），请检查当前搜索引擎 API Key 的计费与配额。",
     "serper_api_key": "Serper API 密钥",
     "serper_key_label": "Serper API 密钥",

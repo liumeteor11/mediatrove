@@ -11,7 +11,7 @@ const SECRET_KEY = import.meta.env.VITE_SECRET_KEY || 'media-tracker-ai-config-s
 
 
 export type AIProvider = 'moonshot' | 'openai' | 'deepseek' | 'qwen' | 'google' | 'mistral' | 'mimo' | 'zhipu' | 'custom';
-export type SearchProvider = 'vertex' | 'serper' | 'yandex' | 'duckduckgo';
+export type SearchProvider = 'vertex' | 'serper' | 'yandex' | 'duckduckgo' | 'deepseek';
 
 // Trending recommendation modes for the search landing page:
 // - 'recent':     time-based preset — hottest / highest-rated works of the last 3 months
@@ -318,6 +318,16 @@ export const useAIStore = create<AIConfigState>()(
         const current = get().logs || [];
         const next = [entry, ...current].slice(0, 200);
         set({ logs: next });
+        // Post-mortem: mirror the entry to <app_data_dir>/logs/ai_io.jsonl
+        // (Tauri only) so AI/search IO survives restarts and can be diagnosed
+        // from disk. Fire-and-forget — logging must never disturb the flow
+        // that produced the entry.
+        try {
+          const isTauri = typeof window !== 'undefined' && (('__TAURI__' in window) || ('__TAURI_INTERNALS__' in window));
+          if (isTauri) {
+            invoke('append_io_log', { entry: JSON.stringify(entry) }).catch(() => {});
+          }
+        } catch {}
       },
       clearLogs: () => set({ logs: [] }),
       initialize: async () => {
@@ -340,6 +350,7 @@ export const useAIStore = create<AIConfigState>()(
                 const engineConfigured =
                     (engine === 'vertex' && !!aiConfig.vertexSearchApiKey && !!aiConfig.vertexSearchProject && !!aiConfig.vertexSearchEngine) ||
                     (engine === 'serper' && !!aiConfig.serperApiKey) ||
+                    (engine === 'deepseek' && String(aiConfig.provider || '') === 'deepseek' && !!aiConfig.apiKey) ||
                     (engine === 'yandex' && !!aiConfig.yandexSearchApiKey && !!aiConfig.yandexSearchLogin);
                 if (engine && engine !== 'duckduckgo' && !engineConfigured) {
                     aiConfig.searchProvider = 'duckduckgo';
@@ -418,6 +429,7 @@ export const useAIStore = create<AIConfigState>()(
               const engineConfigured =
                 (engine === 'vertex' && !!persistedState.vertexSearchApiKey && !!persistedState.vertexSearchProject && !!persistedState.vertexSearchEngine) ||
                 (engine === 'serper' && !!persistedState.serperApiKey) ||
+                (engine === 'deepseek' && persistedState.provider === 'deepseek' && !!persistedState.apiKey) ||
                 (engine === 'yandex' && !!persistedState.yandexSearchApiKey && !!persistedState.yandexSearchLogin);
               if (!engineConfigured) {
                 persistedState.searchProvider = 'duckduckgo';
