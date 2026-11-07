@@ -3083,10 +3083,15 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
 
   const limited = filtered.slice(0, 12);
 
-  try {
-    localStorage.setItem(cacheKey, JSON.stringify(limited));
-    localStorage.setItem(cacheTsKey, Date.now().toString());
-  } catch {}
+  // Empty results must not be cached: a transient failure (missing key,
+  // network blip, rate limit) would otherwise pin zero rows for the whole
+  // cache TTL and hide every config change or fix behind it.
+  if (limited.length > 0) {
+    try {
+      localStorage.setItem(cacheKey, JSON.stringify(limited));
+      localStorage.setItem(cacheTsKey, Date.now().toString());
+    } catch {}
+  }
   return limited;
 };
 
