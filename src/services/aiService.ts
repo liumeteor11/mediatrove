@@ -1,4 +1,4 @@
-import { searchTMDB, getTMDBDetails, getTMDBPosterUrl, tmdbLanguageFromUI } from './tmdbService';
+import { searchTMDB, getTMDBDetails, getTMDBPosterUrl, tmdbLanguageFromUI, parseSeasonSuffix, getTMDBSeasonPoster } from './tmdbService';
 import { searchBangumi } from './bangumiService';
 import { usePluginStore } from '../store/usePluginStore';
 import { PluginExecutor } from './pluginService';
@@ -389,7 +389,10 @@ const fetchPosterFromTMDB = async (title: string, year: string, type: string): P
         : null;
     if (!kind) return undefined;
     try {
-        const results = await searchTMDB(title, kind);
+        // Search the season-stripped base title: TMDB search neither matches
+        // "终极名单 第二季"-style queries reliably nor carries per-season entries.
+        const { base, season } = parseSeasonSuffix(title);
+        const results = await searchTMDB(base, kind);
         if (!Array.isArray(results) || results.length === 0) return undefined;
         const yNum = /^\d{4}$/.test(String(year || '')) ? parseInt(String(year), 10) : null;
         let best: any = undefined;
@@ -404,7 +407,16 @@ const fetchPosterFromTMDB = async (title: string, year: string, type: string): P
         if (!best) {
             const normKey = (v: any) => String(v || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
             const qn = normKey(title);
-            best = results.find((r: any) => normKey(r.title || r.name) === qn) || results[0];
+            const qb = normKey(base);
+            best = results.find((r: any) => normKey(r.title || r.name) === qn)
+                || results.find((r: any) => normKey(r.title || r.name) === qb)
+                || results[0];
+        }
+        // Prefer the season-specific poster for later seasons; the show-level
+        // poster_path is usually season 1's artwork.
+        if (kind === 'tv' && season && typeof best?.id === 'number') {
+            const seasonPoster = await getTMDBSeasonPoster(best.id, season);
+            if (seasonPoster && await checkImage(seasonPoster)) return seasonPoster;
         }
         const url = getTMDBPosterUrl(best?.poster_path || null, 'w500');
         if (url && await checkImage(url)) return url;
@@ -1982,6 +1994,23 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                                     continue;
                                 }
                             }
+                            // Surface the fatal API error in the I/O log — only
+                            // successful completions were logged before, so a failed
+                            // call was invisible in ai_io.jsonl and production
+                            // failures were undiagnosable from disk.
+                            try {
+                                useAIStore.getState().appendLog({
+                                    id: uuidv4(),
+                                    ts: Date.now(),
+                                    channel: 'ai',
+                                    provider: effProvider,
+                                    model,
+                                    baseURL: finalBaseURL,
+                                    request: { messages: currentMessages, tools: effTools },
+                                    response: { error: String(apiError?.message || apiError), status: typeof status === 'number' ? status : undefined },
+                                    durationMs: Math.round(performance.now() - startTs)
+                                });
+                            } catch {}
                             throw apiError;
                         }
                     }
@@ -3574,7 +3603,10 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
             let tmdbMediaType: 'movie' | 'tv' = mapType;
 
             if (!tmdbId) {
-                const candidates = await searchTMDB(item.title, mapType);
+                // Season-stripped search: TMDB entries are show-level, so a
+                // "第X季"/"Season N" suffix would only break matching here too.
+                const { base } = parseSeasonSuffix(item.title);
+                const candidates = await searchTMDB(base, mapType);
                 const year = norm(item.releaseDate).slice(0, 4);
                 const best = (year && /^\d{4}$/.test(year))
                     ? candidates.find(c => (c.release_date || c.first_air_date || '').startsWith(year))
@@ -3860,7 +3892,11 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
             if (Array.isArray(arr) && arr.length > 0) return arr;
             return ['moviepostersgallery.com', 'impawards.com', 'goldposter.com'];
         })();
-        const queryVariants = [query, ...posterDomains.map(d => `${query} site:${d}`)];
+        // Site-restricted poster queries (`X 海报 site:poster-site`) returned
+        // empty results in every logged production session — drop them and
+        // keep only the generic query; posterDomains still score result links
+        // below.
+        const queryVariants = [query];
 
         const normalizeHost = (u: string): string => {
             try {
@@ -4127,8 +4163,7 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
 
             const textQueryVariants = (() => {
                 const base = isChinese ? `${title} 海报` : `"${title}" poster`;
-                const byDomain = posterDomains.map(d => `${base} site:${String(d).trim()}`);
-                const all = [...byDomain, ...queryVariants];
+                const all = [base, ...queryVariants];
                 return Array.from(new Set(all)).slice(0, 10);
             })();
 
@@ -4954,23 +4989,31 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
 
   const applyTMDBDetails = async (it: MediaItem) => {
       const tmdbType: 'movie' | 'tv' = it.type === MediaType.TV_SERIES ? 'tv' : 'movie';
-      const candidates = await searchTMDB(it.title, tmdbType);
+      // Search the season-stripped base title — TMDB search does not handle
+      // "第X季"/"Season N" suffixes, and later seasons live under the show entry.
+      const { base, season } = parseSeasonSuffix(it.title);
+      const candidates = await searchTMDB(base, tmdbType);
       if (!candidates || candidates.length === 0) return;
 
       const year = norm(it.releaseDate).slice(0, 4);
       let best: any = undefined;
 
       if (year && /^\d{4}$/.test(year)) {
-          // Strict year match (+/- 1 year tolerance)
+          // Strict year match (+/- 1 year tolerance). Later seasons air years
+          // after the show's first_air_date, so fall through to title matching
+          // when no candidate lines up with the season's year.
           const yNum = parseInt(year, 10);
           best = candidates.find(c => {
               const cDate = c.release_date || c.first_air_date || '';
               const cYear = parseInt(cDate.slice(0, 4), 10);
               return !isNaN(cYear) && Math.abs(cYear - yNum) <= 1;
           });
-      } else {
-          // If no year, require exact title match
-          best = candidates.find(c => (c.title || c.name || '').toLowerCase() === it.title.toLowerCase());
+      }
+      if (!best) {
+          // Exact title match against the full and the stripped base title
+          const ln = (c: any) => (c.title || c.name || '').toLowerCase();
+          best = candidates.find(c => ln(c) === it.title.toLowerCase())
+              || candidates.find(c => ln(c) === base.toLowerCase());
       }
 
       if (!best || typeof best.id !== 'number') return;
@@ -5014,7 +5057,13 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
           if (names.length > 0) patch.cast = names;
       }
 
-      const poster = getTMDBPosterUrl(details.poster_path) || undefined;
+      // Prefer the season-specific poster for later seasons; the show-level
+      // poster_path is usually season 1's artwork.
+      let poster: string | undefined;
+      if (season && tmdbType === 'tv') {
+          poster = (await getTMDBSeasonPoster(best.id, season)) || undefined;
+      }
+      if (!poster) poster = getTMDBPosterUrl(details.poster_path) || undefined;
       if (poster && isPlaceholderPosterUrl(it.posterUrl)) {
           patch.posterUrl = poster;
       }
