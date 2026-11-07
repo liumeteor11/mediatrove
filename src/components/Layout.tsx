@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { v4 as uuidv4 } from 'uuid';
 import { useThemeStore } from '../store/useThemeStore';
 import { useAppUpdateStore } from '../store/useAppUpdateStore';
@@ -20,6 +21,16 @@ const isTauri = typeof window !== 'undefined' && (('__TAURI__' in window) || ('_
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { theme } = useThemeStore();
   const { t } = useTranslation();
+  const [appVersion, setAppVersion] = useState('');
+
+  // The footer version must reflect the built binary: getVersion() reads the
+  // version baked into the Tauri app (tauri.conf.json at build time), so every
+  // release build shows its own version instead of a hardcoded string that
+  // silently rots.
+  useEffect(() => {
+    if (!isTauri) return;
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
 
   // One silent app-update check per launch; the result feeds the dashboard
   // button (useAppUpdateStore) and a toast when a new release is out.
@@ -95,7 +106,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       </main>
       <footer className="py-8 mt-auto border-t transition-colors duration-300 bg-theme-surface border-theme-border text-theme-subtext">
         <div className="max-w-7xl mx-auto px-4 text-center text-sm">
-          <p>MediaTrove • v0.1.24</p>
+          <p>MediaTrove{appVersion ? ` • v${appVersion}` : ''}</p>
         </div>
       </footer>
     </div>
