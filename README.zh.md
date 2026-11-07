@@ -1,12 +1,22 @@
-# MediaTrove AI
+<div align="center">
+
+<img src="public/icon.svg" width="96" alt="MediaTrove logo" />
+
+# MediaTrove
+
+**一款覆盖 Windows、macOS、Linux 和 Android 的跨平台媒体追踪与收藏应用**，支持电影、电视剧、书籍、漫画、短剧和音乐。
+
+![版本](https://img.shields.io/github/v/release/liumeteor11/mediatrove?include_prereleases&label=version)
+![许可](https://img.shields.io/github/license/liumeteor11/mediatrove)
+![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-4f46e5)
 
 [English](README.md) | [中文](README.zh.md)
 
-一款覆盖 **Windows、macOS、Linux 和 Android** 的跨平台媒体追踪与收藏应用，支持电影、电视剧、书籍、漫画、短剧和音乐。
+📥 **[下载最新版本](https://github.com/liumeteor11/mediatrove/releases)**
+
+</div>
 
 基于 **React + Vite**（前端）和 **Tauri 2 / Rust**（后端）构建。专为速度、隐私和极致用户体验而设计。
-
-> 📥 最新版本请前往 [Releases](https://github.com/liumeteor11/mediatrove/releases) 下载。
 
 ## ✨ 主要功能
 

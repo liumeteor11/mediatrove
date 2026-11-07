@@ -1,12 +1,22 @@
-# MediaTrove AI
+<div align="center">
+
+<img src="public/icon.svg" width="96" alt="MediaTrove logo" />
+
+# MediaTrove
+
+**A cross-platform media companion for Windows, macOS, Linux and Android** — search, collect, and track your media journey (Movies, TV Series, Books, Comics, Short Dramas, Music).
+
+![Release](https://img.shields.io/github/v/release/liumeteor11/mediatrove?include_prereleases&label=version)
+![License](https://img.shields.io/github/license/liumeteor11/mediatrove)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-4f46e5)
 
 [English](README.md) | [中文](README.zh.md)
 
-A cross-platform media companion for **Windows, macOS, Linux and Android** — search, collect, and track your media journey (Movies, TV Series, Books, Comics, Short Dramas, Music).
+📥 **[Download the latest build](https://github.com/liumeteor11/mediatrove/releases)**
+
+</div>
 
 Built with **React + Vite** (Frontend) and **Tauri 2 / Rust** (Backend). Designed for speed, privacy, and an excellent user experience.
-
-> 📥 Download the latest build from [Releases](https://github.com/liumeteor11/mediatrove/releases).
 
 ## ✨ Key Features
 
