@@ -109,16 +109,19 @@ jobs:
       - name: Check signing secrets
         id: signing
         run: |
-          if [ -n "$KS_B64" ] && [ -n "$KEY_ALIAS" ] && [ -n "$STORE_PASS" ]; then
+          if [ -n "$KS_B64" ] && [ -n "$KEY_ALIAS" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_PASS" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Android signing secrets (ANDROID_KEYSTORE_BASE64 / ANDROID_KEY_ALIAS / ANDROID_KEY_STORE_PASSWORD / ANDROID_KEY_PASSWORD) are not configured — uploading the unsigned APK instead."
+            echo "::warning::Android signing secrets (ANDROID_KEYSTORE_BASE64 / ANDROID_KEY_ALIAS / ANDROID_STORE_PASSWORD / ANDROID_KEY_PASSWORD) are not configured — uploading the unsigned APK instead."
           fi
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          STORE_PASS: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          # Must match the names the "Sign Android Release" step below reads —
+          # it uses ANDROID_STORE_PASSWORD, not ANDROID_KEY_STORE_PASSWORD.
+          STORE_PASS: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Sign Android Release
         id: sign_app
