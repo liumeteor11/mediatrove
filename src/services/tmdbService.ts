@@ -1,7 +1,13 @@
 
 import { useAIStore } from "../store/useAIStore";
+import i18n from '../i18n';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+
+// TMDB's `language` param only localizes the returned fields (titles,
+// overviews, posters) — matching is unaffected. Deriving it from the UI
+// language keeps fetched details and artwork consistent with the UI.
+export const tmdbLanguageFromUI = (): string => (i18n.language?.startsWith('zh') ? 'zh-CN' : 'en-US');
 const TMDB_DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const tmdbDetailsMemCache = new Map<string, { ts: number; data: any }>();
 
@@ -19,7 +25,7 @@ export interface TMDBMedia {
   vote_average: number;
 }
 
-export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' = 'multi'): Promise<TMDBMedia[]> => {
+export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' = 'multi', language: string = tmdbLanguageFromUI()): Promise<TMDBMedia[]> => {
   const s = useAIStore.getState();
   const key = s.getDecryptedTmdbKey && s.getDecryptedTmdbKey();
 
@@ -33,7 +39,7 @@ export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' =
   }
 
   try {
-    const url = `${TMDB_BASE_URL}/search/${type}?api_key=${key}&query=${encodeURIComponent(query)}&language=zh-CN&include_adult=false`;
+    const url = `${TMDB_BASE_URL}/search/${type}?api_key=${key}&query=${encodeURIComponent(query)}&language=${encodeURIComponent(language)}&include_adult=false`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`TMDB Error: ${res.statusText}`);
     const data = await res.json();
@@ -44,7 +50,7 @@ export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' =
   }
 };
 
-export const getTMDBDetails = async (id: number, type: 'movie' | 'tv', language: string = 'zh-CN'): Promise<any> => {
+export const getTMDBDetails = async (id: number, type: 'movie' | 'tv', language: string = tmdbLanguageFromUI()): Promise<any> => {
     const s = useAIStore.getState();
     const key = s.getDecryptedTmdbKey && s.getDecryptedTmdbKey();
     if (!s.enableTmdb || !key) return null

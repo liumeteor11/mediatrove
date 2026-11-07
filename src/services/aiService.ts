@@ -1,4 +1,4 @@
-import { searchTMDB, getTMDBDetails, getTMDBPosterUrl } from './tmdbService';
+import { searchTMDB, getTMDBDetails, getTMDBPosterUrl, tmdbLanguageFromUI } from './tmdbService';
 import { searchBangumi } from './bangumiService';
 import { usePluginStore } from '../store/usePluginStore';
 import { PluginExecutor } from './pluginService';
@@ -455,6 +455,24 @@ const isSafeContent = (_text: string): boolean => true;
 const sanitizeSearchResults = (arr: Array<{ title?: any; link?: any }>): any[] =>
     arr.filter((it) => String(it?.title || '').trim().length > 0 || String(it?.link || '').trim().length > 0);
 
+// Search engines ignore (or reject) very long, instruction-like queries, and
+// models occasionally echo the whole user prompt into the web_search `query`
+// argument. Collapse whitespace, strip wrapping quotes and cap the length at
+// this single choke point so every search path gets a usable query.
+export const sanitizeSearchQuery = (raw: string): string => {
+    let q = String(raw ?? '')
+        .replace(/\s+/g, ' ')
+        .replace(/^["'\u201c\u2018\u300c\u300e]+|["'\u201d\u2019\u300d\u300f]+$/g, '')
+        .trim();
+    const MAX_QUERY_LENGTH = 100;
+    if (q.length > MAX_QUERY_LENGTH) {
+        const cut = q.slice(0, MAX_QUERY_LENGTH);
+        const sp = cut.lastIndexOf(' ');
+        q = (sp > 40 ? cut.slice(0, sp) : cut).trim();
+    }
+    return q;
+};
+
 export const performClientSideSearch = async (
     query: string,
     force: boolean = false,
@@ -487,7 +505,7 @@ export const performClientSideSearch = async (
     try {
         const isChinese = i18n.language.startsWith('zh');
         const shortOrNumeric = query.trim().length < 3 || /^[0-9\s]+$/.test(query.trim());
-        const base = query.trim();
+        const base = sanitizeSearchQuery(query);
 
         const inferType = (): MediaType | 'All' => {
             if (preferredType) return preferredType as MediaType | 'All';
@@ -1779,7 +1797,7 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                             properties: {
                                 query: {
                                     type: "string",
-                                    description: "The search query"
+                                    description: "Short keyword search query, ideally under 64 characters. Extract only the key search terms (titles, genres, dates); do NOT echo the user's full request or instructions. 简短关键词查询（64 字符以内），严禁把用户指令原文作为 query。"
                                 }
                             },
                             required: ["query"]
@@ -2766,6 +2784,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
               userPrompt += `\n[系列] 若查询为系列作品（如第一部/第二部/续集），请分别返回各部作品，并给出准确年份。`;
               userPrompt += `\n[最新季] 若目标作品为电视剧/番剧/短剧等分季作品，**必须**检索其最新一季：搜索关键词需同时尝试中文与英文（如"${q} 最新一季"及英文名+season N），并优先采用搜索结果中最新一集/最新播出季的信息反推季数与首播年份。若搜索结果显示存在正在播出或刚官宣的更新季，**必须**返回该最新季（title 写作"《剧名》 第N季"；isOngoing=true，latestUpdateInfo 填播出状态，元数据不全时用搜索结果补全），严禁只返回旧季或仅凭内部知识断言最新季。`;
               userPrompt += `\n[强制] 必须先调用联网搜索工具 (web_search) 核实并获取最新信息，优先基于搜索结果回答；仅当搜索执行失败或无结果时，才基于已有知识返回有效 JSON。`;
+              userPrompt += `\n[搜索词] 调用 web_search 时，query 参数必须是简短的搜索关键词（64 字符以内，如作品名+年份），严禁把完整指令或本提示词原文作为 query。`;
               if (searchContext) {
                   userPrompt += `\n应用已获取的联网搜索结果：\n${searchContext}`;
               }
@@ -2782,6 +2801,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
                   : `\n[Constraint] Only return works (novels, movies, TV series, short dramas, comics, music albums). Do NOT include news, product reviews, comparisons, specs, prices, or phone/electronics items.`;
               userPrompt += `\n[LATEST SEASON] If the target is a seasonal work (TV series/anime/short drama), you MUST look up its newest season: search in both the original language and English (e.g. "${q} latest season", "<English title> season N"), ground on the newest episode/season info in the results, and include that season as one returned item (title as "Title Season N" where applicable). If the results show a newer or currently-airing season beyond your internal knowledge, you MUST return it (isOngoing=true, latestUpdateInfo = airing status) even when some metadata is missing. Fill latestUpdateInfo with the current airing state. Do NOT return only older seasons, and do NOT assert the newest season from memory alone.`;
               userPrompt += `\n[REQUIRED] You MUST call the web_search tool first to verify and fetch up-to-date info, and ground your answer in search results; only fall back to internal knowledge if the search fails or returns nothing.`;
+              userPrompt += `\n[QUERY FORM] When calling web_search, the query argument must be short keywords (under 64 characters, e.g. title + year). Do NOT echo the full instruction or this prompt as the query.`;
               if (searchContext) {
                   userPrompt += `\nWeb results already fetched by the app:\n${searchContext}`;
               }
@@ -2809,6 +2829,13 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
               userPrompt += `\nUse your web search tool or refer to the following search results to verify info:\n${searchContext}\nIf search results are insufficient, please use your internal knowledge to complete the metadata (especially detailed description). Return ONLY a valid JSON array.`;
           }
       }
+
+      // Output language must match the UI language (same rule as trending):
+      // the model otherwise mirrors whatever language the query/snippets use,
+      // producing mixed zh/en titles and descriptions.
+      userPrompt += isChinese
+          ? `\n[语言] 所有字段（title、directorOrAuthor、cast、description、latestUpdateInfo）必须全部用简体中文填写，外国作品使用通用中文译名。`
+          : `\n[LANGUAGE] Fill ALL fields (title, directorOrAuthor, cast, description, latestUpdateInfo) in English; use the common English title for foreign works.`;
 
       const messages = [
         { role: "system", content: systemPrompt + (isChinese ? " 请务必使用JSON格式返回。不要使用Markdown代码块。只返回JSON数组。" : " Please return strictly valid JSON. Do not use markdown code blocks. Return ONLY a JSON array.") },
@@ -3011,10 +3038,11 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
           if (!tmdbId) return;
 
           detailCalls += 1;
-          let details = await getTMDBDetails(tmdbId, tmdbMediaType, 'zh-CN');
+          const uiLang = tmdbLanguageFromUI();
+          let details = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang);
           if (details && isUnknownText(details.overview)) {
-              const en = await getTMDBDetails(tmdbId, tmdbMediaType, 'en-US');
-              if (en && !isUnknownText(en.overview)) details = { ...details, overview: en.overview };
+              const alt = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang === 'zh-CN' ? 'en-US' : 'zh-CN');
+              if (alt && !isUnknownText(alt.overview)) details = { ...details, overview: alt.overview };
           }
           if (!details) return;
 
@@ -3536,10 +3564,11 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
             }
 
             if (tmdbId) {
-                let details = await getTMDBDetails(tmdbId, tmdbMediaType, 'zh-CN');
+                const uiLang = tmdbLanguageFromUI();
+                let details = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang);
                 if (details && isUnknownText(details.overview)) {
-                    const en = await getTMDBDetails(tmdbId, tmdbMediaType, 'en-US');
-                    if (en && !isUnknownText(en.overview)) details = { ...details, overview: en.overview };
+                    const alt = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang === 'zh-CN' ? 'en-US' : 'zh-CN');
+                    if (alt && !isUnknownText(alt.overview)) details = { ...details, overview: alt.overview };
                 }
                 if (details) {
                     updates.tmdbId = tmdbId;
@@ -3690,7 +3719,9 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
         const tmdb = await fetchPosterFromTMDB(searchTitle, yearToken, type);
         if (tmdb) return tmdb;
         // 2. Douban covers (Tauri backend; strong for zh titles, covers all types).
-        if (isTauriEnv) {
+        // Douban artwork is always Chinese-sourced, so skip it for non-zh UIs —
+        // otherwise an English UI gets English details under a Chinese poster.
+        if (isTauriEnv && i18n.language.startsWith('zh')) {
             try {
                 const kind = String(type || '').toLowerCase();
                 const t0 = performance.now();
@@ -4509,7 +4540,7 @@ export const getTrendingPromptKey = (): string => {
     const langKey = i18n.language.split('-')[0];
     const mode: TrendingMode = s.trendingMode || 'recent';
     const parts: string[] = [langKey, mode, String(s.provider || ''), String(s.model || ''), String(s.searchProvider || '')];
-    if (mode === 'custom') parts.push((s.trendingPrompt || '').trim());
+    if (mode === 'custom') parts.push((s.trendingPrompt || '').trim() || i18n.t('search_page.default_prompt'));
     if (mode === 'preference') {
         const titles = useCollectionStore
             .getState()
@@ -4524,6 +4555,10 @@ export const getTrendingPromptKey = (): string => {
 export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<MediaItem[]> => {
   const { systemPrompt, trendingPrompt, provider, trendingMode } = useAIStore.getState();
   const mode: TrendingMode = trendingMode || 'recent';
+  // An empty stored prompt means "follow the localized default", so the
+  // custom recommendation prompt switches language together with the UI.
+  // Only an explicitly saved custom text is pinned to its own language.
+  const effectiveTrendingPrompt = (trendingPrompt || '').trim() || i18n.t('search_page.default_prompt');
   const dateObj = new Date();
   const today = dateObj.toISOString().split('T')[0];
   const currentYear = dateObj.getFullYear();
@@ -4548,8 +4583,8 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
   if (trendingEnableNetworking && !canNativeSearch) {
       const preQuery = mode === 'preference'
           ? (isChinese ? `${currentYear} 高分热门电影 电视剧 小说 推荐` : `best rated popular movies tv series books ${currentYear}`)
-          : (mode === 'custom' && trendingPrompt.trim())
-              ? trendingPrompt.trim().replace(/\s+/g, ' ').slice(0, 60)
+          : mode === 'custom'
+              ? effectiveTrendingPrompt.trim().replace(/\s+/g, ' ').slice(0, 60)
               : (isChinese ? `最热门电影电视剧 ${monthStr}` : `most popular movies and tv series ${currentYear}-${currentMonth}`);
       try {
           searchContext = await performClientSideSearch(preQuery, true);
@@ -4587,8 +4622,8 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
 
   let userPrompt = "";
 
-  if (mode === 'custom' && trendingPrompt && trendingPrompt.trim()) {
-      userPrompt = trendingPrompt;
+  if (mode === 'custom') {
+      userPrompt = effectiveTrendingPrompt;
       userPrompt += excludeStr;
       userPrompt += isChinese
         ? `\n\n[系统提示] 当前日期: ${today}。
@@ -4598,7 +4633,8 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
         4. 返回的数据必须准确，releaseDate 需尽量精确到年月日。
         5. 务必返回严格合法的JSON数组，不要包含Markdown格式（如 \`\`\`json）。
         6. 严禁返回任何笼统的平台名称（如”iQIYI”、”Netflix”）、国家类别（如”美国电视剧”）或非具体作品。必须是具体的电影、电视剧或动漫名称。
-        7. 严禁返回任何形式的“合集”、“盘点”、“推荐列表”类文章标题（如“2025必看美剧合集”）。必须是单个的具体作品名称。`
+        7. 严禁返回任何形式的“合集”、“盘点”、“推荐列表”类文章标题（如“2025必看美剧合集”）。必须是单个的具体作品名称。
+        8. 调用 web_search 时，query 参数必须是简短的搜索关键词（64 字符以内），严禁把完整指令或提示词原文作为 query。`
         : `\n\n[System Note] Today's Date: ${today}.
         1. You have a 'web_search' tool. **You MUST use this tool first** to search for the latest media works matching the requirements.
         2. Do NOT fabricate data. Recommend based on search results.
@@ -4606,7 +4642,8 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
         4. Ensure returned data is accurate; releaseDate should be as specific as possible.
         5. Return STRICTLY valid JSON array, do NOT use Markdown format (like \`\`\`json).
         6. Do NOT return generic platform names (e.g. “iQIYI”, “Netflix”) or categories (e.g. “US TV Series”). Must be specific movie/series/anime titles.
-        7. Do NOT return collection/compilation titles (e.g. “Top 10 Movies”, “Best Series List”). Must be single, specific work titles.`;
+        7. Do NOT return collection/compilation titles (e.g. “Top 10 Movies”, “Best Series List”). Must be single, specific work titles.
+        8. When calling web_search, the query argument must be short keywords (under 64 characters). Do NOT echo the full instruction or prompt as the query.`;
   } else if (mode === 'preference') {
      // Taste-based preset: summarize the user's collection, let the model
      // infer preferences, then recommend related works they don't own yet.
@@ -4716,6 +4753,12 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
 
   // Fallback instructions if search fails
   userPrompt += searchUnavailableNote;
+  // Output language must match the UI language: the model otherwise copies
+  // whatever language the search snippets happened to use, producing mixed
+  // zh/en details (e.g. English details under Chinese posters).
+  userPrompt += isChinese
+      ? `\n[语言] 所有字段（title、directorOrAuthor、cast、description、latestUpdateInfo）必须全部用简体中文填写，外国作品使用通用中文译名。`
+      : `\n[LANGUAGE] Fill ALL fields (title, directorOrAuthor, cast, description, latestUpdateInfo) in English; use the common English title for foreign works.`;
   userPrompt += `\n\nIMPORTANT: ALWAYS return a valid JSON array, even if empty or with fewer items. Do NOT return markdown text or explanations outside the JSON.`;
 
   const messages = [
@@ -4908,10 +4951,11 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
 
       if (!best || typeof best.id !== 'number') return;
 
-      let details = await getTMDBDetails(best.id, tmdbType, 'zh-CN');
+      const uiLang = tmdbLanguageFromUI();
+      let details = await getTMDBDetails(best.id, tmdbType, uiLang);
       if (details && isUnknownText(details.overview)) {
-          const en = await getTMDBDetails(best.id, tmdbType, 'en-US');
-          if (en && !isUnknownText(en.overview)) details = { ...details, overview: en.overview };
+          const alt = await getTMDBDetails(best.id, tmdbType, uiLang === 'zh-CN' ? 'en-US' : 'zh-CN');
+          if (alt && !isUnknownText(alt.overview)) details = { ...details, overview: alt.overview };
       }
       if (!details) return;
 
