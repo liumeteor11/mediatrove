@@ -1553,25 +1553,43 @@ const parseTemperatureRequirement = (e: any): TemperatureRequirement | null => {
 };
 
 /**
- * Text-form tool calls emitted by some thinking models (mimo) when the tool
- * definitions are absent — e.g. after the search budget closes:
- * `<tool_call><function=web_search><parameter=query>...</parameter></function></tool_call>`.
+ * Text-form tool calls emitted by some thinking models when the tool
+ * definitions are absent — e.g. after the search budget closes. Two shapes
+ * are seen in the wild:
+ * - mimo: `<tool_call><function=web_search><parameter=query>...</parameter></function></tool_call>`
+ * - DeepSeek: `<｜｜DSML｜｜ invoke name="web_search"><｜｜DSML｜｜ parameter name="query" string="true">…</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke>`
  * Parsing them lets the app run the requested searches and feed the results
  * back, instead of returning the raw tool-call text as the final answer.
  */
 const parseTextToolCalls = (content: string): Array<{ name: string; query: string }> => {
     const out: Array<{ name: string; query: string }> = [];
-    if (!content || !content.includes('<tool_call>')) return out;
-    const re = /<tool_call>\s*<function\s*=\s*([\w.:-]+)\s*>((?:[\s\S](?!<\/tool_call>))*?)<\/function>\s*<\/tool_call>/gi;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
-        const name = String(m[1] || '');
-        const body = String(m[2] || '');
-        const q = body.match(/<parameter\s*=\s*query\s*>([\s\S]*?)<\/parameter>/i)
-            || body.match(/<parameter\s+name\s*=\s*"query"\s*>([\s\S]*?)<\/parameter>/i)
-            || body.match(/<parameter\s*=\s*([\w-]+)\s*>([\s\S]*?)<\/parameter>/i);
-        const query = q ? (q[2] !== undefined ? q[2] : q[1] || '').trim() : '';
-        out.push({ name, query });
+    if (!content) return out;
+
+    if (content.includes('<tool_call>')) {
+        const re = /<tool_call>\s*<function\s*=\s*([\w.:-]+)\s*>((?:[\s\S](?!<\/tool_call>))*?)<\/function>\s*<\/tool_call>/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content)) !== null) {
+            const name = String(m[1] || '');
+            const body = String(m[2] || '');
+            const q = body.match(/<parameter\s*=\s*query\s*>([\s\S]*?)<\/parameter>/i)
+                || body.match(/<parameter\s+name\s*=\s*"query"\s*>([\s\S]*?)<\/parameter>/i)
+                || body.match(/<parameter\s*=\s*([\w-]+)\s*>([\s\S]*?)<\/parameter>/i);
+            const query = q ? (q[2] !== undefined ? q[2] : q[1] || '').trim() : '';
+            out.push({ name, query });
+        }
+    }
+
+    // DeepSeek DSML markup (fullwidth-bar delimiters), emitted as plain text
+    // under the same conditions — handled by the same recovery path as mimo's.
+    if (content.includes('DSML')) {
+        const re = /<｜｜DSML｜｜\s*invoke\s+name\s*=\s*"([\w.:-]+)"\s*>((?:(?!<\/｜｜DSML｜｜\s*invoke>)[\s\S])*?)<\/｜｜DSML｜｜\s*invoke>/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content)) !== null) {
+            const name = String(m[1] || '');
+            const body = String(m[2] || '');
+            const q = body.match(/<｜｜DSML｜｜\s*parameter\s+name\s*=\s*"query"[^>]*>([\s\S]*?)<\/｜｜DSML｜｜\s*parameter>/i);
+            out.push({ name, query: q ? q[1].trim() : '' });
+        }
     }
     return out;
 };
@@ -2086,7 +2104,11 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                             // Recovery already used and the model still emits tool-call
                             // text: strip it and accept the remainder as the answer, or
                             // force one plain final answer when nothing remains.
-                            const stripped = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim();
+                            const stripped = content
+                                .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+                                .replace(/<｜｜DSML｜｜\s*calls>[\s\S]*?<\/｜｜DSML｜｜\s*calls>/gi, '')
+                                .replace(/<｜｜DSML｜｜\s*invoke[\s\S]*?<\/｜｜DSML｜｜\s*invoke>/gi, '')
+                                .trim();
                             if (stripped) {
                                 content = stripped;
                             } else if (!emptyAnswerNudged) {
@@ -4583,9 +4605,11 @@ export const getTrendingMedia = async (excludeItems: MediaItem[] = []): Promise<
   if (trendingEnableNetworking && !canNativeSearch) {
       const preQuery = mode === 'preference'
           ? (isChinese ? `${currentYear} 高分热门电影 电视剧 小说 推荐` : `best rated popular movies tv series books ${currentYear}`)
-          : mode === 'custom'
-              ? effectiveTrendingPrompt.trim().replace(/\s+/g, ' ').slice(0, 60)
-              : (isChinese ? `最热门电影电视剧 ${monthStr}` : `most popular movies and tv series ${currentYear}-${currentMonth}`);
+          // The custom template is an instruction, not a search query — slicing
+          // it used to search "[任务] 使用联网搜索工具…" and ground the round on
+          // SEO articles. The model's own web_search rounds carry the template's
+          // specifics; the pre-fetch only needs fresh generic candidates.
+          : (isChinese ? `最热门电影电视剧 动漫 ${monthStr}` : `most popular movies tv series anime ${currentYear}-${currentMonth}`);
       try {
           searchContext = await performClientSideSearch(preQuery, true);
       } catch { searchContext = ""; }
