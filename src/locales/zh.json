@@ -370,7 +370,7 @@
     "user_exists": "用户已存在"
   },
   "footer": {
-    "rights_reserved": "MediaTrove AI. 版权所有。",
+    "rights_reserved": "MediaTrove. 版权所有。",
     "powered_by": "由 Moonshot AI 驱动 • 使用 React & Vite 构建"
   },
   "media_card": {

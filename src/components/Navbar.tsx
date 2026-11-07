@@ -76,7 +76,7 @@ export const Navbar: React.FC = () => {
             <div className="w-8 h-8 rounded-theme flex items-center justify-center transition-colors bg-theme-accent text-theme-bg">
               <Library className="w-5 h-5" />
             </div>
-            <span className="font-bold text-xl tracking-tight text-theme-text font-theme">MediaTrove AI</span>
+            <span className="font-bold text-xl tracking-tight text-theme-text font-theme">MediaTrove</span>
           </Link>
           {aiDate && (
             <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-theme text-xs font-medium text-theme-subtext bg-theme-surface/50 max-w-[300px] truncate" title={aiDate}>
