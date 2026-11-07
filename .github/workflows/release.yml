@@ -101,6 +101,23 @@ jobs:
       - name: Init Tauri Android
         run: npm run tauri android init
 
+      - name: Set Android app label
+        # gen/android is not committed — `tauri android init` regenerates it
+        # with the lowercase productName as the launcher label. Patch it to the
+        # display name on every build; the pattern preserves extra attributes
+        # like translatable="false".
+        run: |
+          found=0
+          for f in $(find src-tauri/gen/android/app/src/main/res -name strings.xml); do
+            if grep -q 'name="app_name"' "$f"; then
+              sed -i 's|<string name="app_name"\([^>]*\)>[^<]*</string>|<string name="app_name"\1>MediaTrove</string>|' "$f"
+              found=1
+            fi
+          done
+          if [ "$found" != "1" ]; then
+            echo "::warning::No app_name string found in the generated Android resources — launcher label was not patched."
+          fi
+
       - name: Build Android APK
         run: npm run tauri android build -- --apk true
         env:
