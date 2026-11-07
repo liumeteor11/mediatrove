@@ -2504,7 +2504,11 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
         async () => {
           let bType = undefined;
           if (type === MediaType.BOOK) bType = 1;
-          if (type === MediaType.TV_SERIES || type === MediaType.COMIC) bType = 2;
+          if (type === MediaType.TV_SERIES) bType = 2;
+          // Bangumi files comics under its book category; querying the anime
+          // category (2) returned anime adaptations that the final COMIC
+          // filter then dropped —漫画 searches never surfaced any results.
+          if (type === MediaType.COMIC) bType = 1;
           if (type === MediaType.MUSIC) bType = 3;
           return await searchBangumi(q, bType);
         },
@@ -2598,9 +2602,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   // Convert Bangumi Results
   const bangumiItems: MediaItem[] = bangumiRes.map((item: any) => {
       let mType = MediaType.OTHER;
-      if (item.type === 1) mType = MediaType.BOOK;
-      else if (item.type === 2) mType = MediaType.TV_SERIES; 
+      if (item.type === 1) mType = (type === MediaType.COMIC) ? MediaType.COMIC : MediaType.BOOK;
+      else if (item.type === 2) mType = MediaType.TV_SERIES;
       else if (item.type === 3) mType = MediaType.MUSIC;
+      else if (item.type === 4) mType = MediaType.OTHER; // Bangumi subject type 4 = game
       else if (item.type === 6) mType = MediaType.TV_SERIES;
 
       const releaseDate = String(item.date || item.air_date || '').trim();
@@ -2755,7 +2760,9 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
               } else {
                   userPrompt += ` (包括书籍、电影、电视剧、漫画、短剧)`;
               }
-              userPrompt += `\n[限制] 仅返回作品（小说、电影、电视剧、短剧、漫画、音乐专辑）。严禁返回新闻、产品评测、对比、参数、价格、手机/电子产品相关条目。`;
+              userPrompt += (type === MediaType.OTHER)
+                  ? `\n[限制] 返回与查询相关的其他类型媒体作品（如游戏、广播剧、有声书、设定集、画集等），type 字段填写 "Other"。严禁返回新闻、产品评测、对比、参数、价格类条目。`
+                  : `\n[限制] 仅返回作品（小说、电影、电视剧、短剧、漫画、音乐专辑）。严禁返回新闻、产品评测、对比、参数、价格、手机/电子产品相关条目。`;
               userPrompt += `\n[系列] 若查询为系列作品（如第一部/第二部/续集），请分别返回各部作品，并给出准确年份。`;
               userPrompt += `\n[最新季] 若目标作品为电视剧/番剧/短剧等分季作品，**必须**检索其最新一季：搜索关键词需同时尝试中文与英文（如"${q} 最新一季"及英文名+season N），并优先采用搜索结果中最新一集/最新播出季的信息反推季数与首播年份。若搜索结果显示存在正在播出或刚官宣的更新季，**必须**返回该最新季（title 写作"《剧名》 第N季"；isOngoing=true，latestUpdateInfo 填播出状态，元数据不全时用搜索结果补全），严禁只返回旧季或仅凭内部知识断言最新季。`;
               userPrompt += `\n[强制] 必须先调用联网搜索工具 (web_search) 核实并获取最新信息，优先基于搜索结果回答；仅当搜索执行失败或无结果时，才基于已有知识返回有效 JSON。`;
@@ -2770,7 +2777,9 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
               } else {
                   userPrompt += ` (books, movies, TV series, comics, short dramas)`;
               }
-              userPrompt += `\n[Constraint] Only return works (novels, movies, TV series, short dramas, comics, music albums). Do NOT include news, product reviews, comparisons, specs, prices, or phone/electronics items.`;
+              userPrompt += (type === MediaType.OTHER)
+                  ? `\n[Constraint] Return other-type media works related to the query (games, audio dramas, audiobooks, art books, etc.) with type set to "Other". Do NOT include news, product reviews, comparisons, specs, or prices.`
+                  : `\n[Constraint] Only return works (novels, movies, TV series, short dramas, comics, music albums). Do NOT include news, product reviews, comparisons, specs, prices, or phone/electronics items.`;
               userPrompt += `\n[LATEST SEASON] If the target is a seasonal work (TV series/anime/short drama), you MUST look up its newest season: search in both the original language and English (e.g. "${q} latest season", "<English title> season N"), ground on the newest episode/season info in the results, and include that season as one returned item (title as "Title Season N" where applicable). If the results show a newer or currently-airing season beyond your internal knowledge, you MUST return it (isOngoing=true, latestUpdateInfo = airing status) even when some metadata is missing. Fill latestUpdateInfo with the current airing state. Do NOT return only older seasons, and do NOT assert the newest season from memory alone.`;
               userPrompt += `\n[REQUIRED] You MUST call the web_search tool first to verify and fetch up-to-date info, and ground your answer in search results; only fall back to internal knowledge if the search fails or returns nothing.`;
               if (searchContext) {
@@ -2841,6 +2850,8 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
                     const posterUrl = prefetchedImages.get(item.title.toLowerCase()) || undefined;
                     const normalizeType = (v: any, title: string, desc?: string): MediaType => {
                         const s = String(v || '').toLowerCase();
+                        // Word-boundary check: "another"/"brothers" must not match.
+                        if (/^other\b/.test(s) || s === '其他') return MediaType.OTHER;
                         if (s.includes('novel') || s.includes('book') || s.includes('小说') || s.includes('书')) return MediaType.BOOK;
                         if (s.includes('album') || s.includes('music') || s.includes('专辑') || s.includes('音乐')) return MediaType.MUSIC;
                         if (s.includes('tv') || s.includes('series') || s.includes('season') || s.includes('电视剧') || s.includes('剧集')) return MediaType.TV_SERIES;
@@ -2956,7 +2967,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   }
 
   let filtered = Array.from(uniqueItems.values()).filter(r => {
-      const allowedTypes = new Set<string>(Object.values(MediaType).filter((t) => t !== MediaType.OTHER));
+      // OTHER results are noise from untyped sources — except when the user
+      // explicitly asked for the Other filter, which would otherwise always
+      // return zero rows (the strict type filter below can never match).
+      const allowedTypes = new Set<string>(Object.values(MediaType).filter((t) => t !== MediaType.OTHER || type === MediaType.OTHER));
       return allowedTypes.has(r.type);
   });
 
@@ -3057,12 +3071,15 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       return items.map(i => byId.get(i.id) || i);
   };
 
-  filtered = await enrichWithTMDB(filtered);
-  if (diagEnabled) finalizeDiagnostics();
-
+  // Type filter before enrichment: TMDB detail calls cost quota and only
+  // apply to movie/TV, so don't spend them on items the selected type is
+  // about to drop.
   if (type && type !== 'All') {
       filtered = filtered.filter(it => it.type === type);
   }
+
+  filtered = await enrichWithTMDB(filtered);
+  if (diagEnabled) finalizeDiagnostics();
 
   const limited = filtered.slice(0, 12);
 
