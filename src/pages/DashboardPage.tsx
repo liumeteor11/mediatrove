@@ -425,7 +425,6 @@ export const DashboardPage: React.FC = () => {
           )}
         </div>
         <div className="p-3 rounded-theme shadow-sm border bg-theme-surface border-theme-border">
-          <h3 className="text-sm font-medium text-theme-subtext mb-2">{t('dashboard.authoritative_domains')}</h3>
           <AuthoritativeDomainsPanel />
         </div>
       </div>
@@ -611,7 +610,11 @@ const AuthoritativeDomainsPanel: React.FC = () => {
   const [active, setActive] = useState<'movie_tv'|'book'|'comic'|'music'|'poster'>('movie_tv');
   const [newDomain, setNewDomain] = useState('');
   const [testing, setTesting] = useState<string | null>(null);
+  // Collapsed by default: the editor (tabs, input, per-domain rows) only
+  // matters when curating sources; otherwise a one-line summary is enough.
+  const [open, setOpen] = useState(false);
   const list = authoritativeDomains[active] || [];
+  const totalDomains = Object.values(authoritativeDomains).reduce((n, l) => n + (l?.length || 0), 0);
 
   const handleAdd = () => {
     const d = newDomain.trim();
@@ -636,6 +639,30 @@ const AuthoritativeDomainsPanel: React.FC = () => {
 
   return (
     <div className="space-y-2 mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 text-left group"
+      >
+        <span className="text-sm font-medium text-theme-subtext group-hover:text-theme-text transition-colors shrink-0">
+          {t('dashboard.authoritative_domains')}
+        </span>
+        {!open && (
+          <span className="text-xs text-theme-subtext/70 truncate flex-1" title={list.join(', ')}>
+            {totalDomains > 0
+              ? `${list.slice(0, 3).join(' · ')}${list.length > 3 ? ` +${list.length - 3}` : ''}`
+              : t('dashboard.no_domains')}
+          </span>
+        )}
+        <ChevronDown
+          className={clsx(
+            "w-4 h-4 shrink-0 text-theme-subtext group-hover:text-theme-accent transition-transform",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+      {open && (<>
       <div className="flex gap-2 flex-wrap">
         <button className={clsx('px-2 py-1 text-xs rounded-md border-2 transition-colors', active==='movie_tv'?'bg-theme-accent text-theme-bg border-theme-accent':'bg-theme-surface text-theme-subtext border-theme-border hover:text-theme-text')} onClick={()=>setActive('movie_tv')}>{t('search_page.filter_movies')}/{t('search_page.filter_tv')}</button>
         <button className={clsx('px-2 py-1 text-xs rounded-md border-2 transition-colors', active==='book'?'bg-theme-accent text-theme-bg border-theme-accent':'bg-theme-surface text-theme-subtext border-theme-border hover:text-theme-text')} onClick={()=>setActive('book')}>{t('search_page.filter_books')}</button>
@@ -669,6 +696,7 @@ const AuthoritativeDomainsPanel: React.FC = () => {
           <div className="text-xs text-theme-subtext py-2 text-center border border-dashed border-theme-border/50 rounded-md">{t('dashboard.no_domains')}</div>
         )}
       </div>
+      </>)}
     </div>
   );
 };

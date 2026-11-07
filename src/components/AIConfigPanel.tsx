@@ -60,6 +60,22 @@ export const AIConfigPanel: React.FC = () => {
   const [trendingHistoryCount, setTrendingHistoryCount] = useState(() => getTrendingHistory().length);
   useEffect(() => { setTrendingPromptDraft(trendingPrompt || ''); }, [trendingPrompt]);
   const [showKey, setShowKey] = useState(false);
+  // The panel lives inline on the dashboard and spans several screens; keep it
+  // collapsed by default with a one-line summary in the header. The choice is
+  // persisted so the dashboard keeps its shape across visits.
+  const [panelCollapsed, setPanelCollapsed] = useState(() => {
+    try { return localStorage.getItem('media_tracker_aiconfig_collapsed') !== '0'; } catch { return true; }
+  });
+  const togglePanelCollapsed = () => {
+    setPanelCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem('media_tracker_aiconfig_collapsed', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
+  // Rarely-touched sub-sections stay collapsed while the panel is open.
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [proxyOpen, setProxyOpen] = useState(false);
   const [showVertexKey, setShowVertexKey] = useState(false);
   const [showSerperKey, setShowSerperKey] = useState(false);
   const [showYandexKey, setShowYandexKey] = useState(false);
@@ -288,17 +304,36 @@ export const AIConfigPanel: React.FC = () => {
 
   return (
     <div className="bg-theme-surface border border-theme-border rounded-xl p-5 shadow-sm">
-      <div className="flex items-center gap-2 mb-4 border-b border-theme-border pb-3">
-        <Activity className="w-6 h-6 text-theme-accent" />
-        <h2 className="text-xl font-bold text-theme-text">{t('ai_config.title')}</h2>
+      <div className="flex items-center gap-2 border-b border-theme-border pb-3">
+        <button
+          type="button"
+          onClick={togglePanelCollapsed}
+          aria-expanded={!panelCollapsed}
+          className="flex items-center gap-2 flex-1 min-w-0 text-left group"
+        >
+          <Activity className="w-6 h-6 text-theme-accent shrink-0" />
+          <h2 className="text-xl font-bold text-theme-text whitespace-nowrap">{t('ai_config.title')}</h2>
+          <span className="text-xs text-theme-subtext truncate">
+            {providerLabel(provider)}{model ? ` · ${model}` : ''}
+          </span>
+          <ChevronDown
+            className={clsx(
+              "ml-auto w-4 h-4 shrink-0 text-theme-subtext group-hover:text-theme-accent transition-transform",
+              !panelCollapsed && "rotate-180"
+            )}
+          />
+        </button>
         <button
           onClick={() => setIsPluginManagerOpen(true)}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-theme-border bg-theme-bg text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-theme-border bg-theme-bg text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors shrink-0"
         >
           <Plug className="w-3.5 h-3.5" />
           {t('plugin_manager.title')}
         </button>
       </div>
+
+      {!panelCollapsed && (
+      <>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {/* Left Column */}
@@ -478,69 +513,6 @@ export const AIConfigPanel: React.FC = () => {
 
         {/* Right Column */}
         <div className="space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.model_name_label')}</label>
-            <div className="relative">
-               {showInput ? (
-                 <div className="flex gap-2">
-                   <input 
-                     type="text" 
-                     value={model} 
-                     onChange={(e) => setConfig({ model: e.target.value })}
-                     className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                     placeholder={provider === 'custom' ? t('ai_config.enter_model_name') : t('ai_config.enter_custom_model_name')}
-                   />
-                   {provider !== 'custom' && (
-                     <button
-                        onClick={() => {
-                            setIsManualInput(false);
-                            // If current model is not in list, revert to default
-                            if (!availableModels.some(m => m.name === model)) {
-                                 setConfig({ model: availableModels[0]?.name || '' });
-                            }
-                        }}
-                        className="px-3 py-2 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-bg text-theme-subtext transition-colors"
-                        title={t('ai_config.switch_to_list')}
-                     >
-                        <List className="w-4 h-4" />
-                     </button>
-                   )}
-                 </div>
-               ) : (
-                 <select 
-                   value={model} 
-                   onChange={(e) => {
-                       if (e.target.value === '__manual__') {
-                           setIsManualInput(true);
-                       } else {
-                           setConfig({ model: e.target.value });
-                       }
-                   }}
-                   className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-                 >
-                   {availableModels.map(m => (
-                     <option key={m.name} value={m.name} className={m.deprecated ? 'text-theme-subtext/50' : ''}>
-                       {m.name} ({m.version} - {m.releaseDate}){m.deprecated ? ' ⚠' : ''}
-                     </option>
-                   ))}
-                   <option value="__manual__" className="text-theme-accent font-medium bg-theme-surface">
-                       {t('ai_config.manual_input')}
-                   </option>
-                 </select>
-               )}
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-theme-text mb-1">{t('ai_config.max_tokens')}</label>
-            <input 
-              type="number" 
-              value={maxTokens}
-              onChange={(e) => setConfig({ maxTokens: parseInt(e.target.value) })}
-              className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
-            />
-          </div>
-
           <div>
             <label className="block text-sm font-medium text-theme-text mb-2">{t('ai_config.model_capabilities')}</label>
             <div className="space-y-3 bg-theme-bg/30 p-3 rounded-lg border border-theme-border">
@@ -1192,6 +1164,8 @@ export const AIConfigPanel: React.FC = () => {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {isProxyHelpOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
