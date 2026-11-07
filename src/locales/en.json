@@ -278,7 +278,7 @@
     "refresh_done": "Refresh completed",
     "trending_refresh_failed": "Failed to refresh trending media.",
     "trending_load_failed": "Failed to load trending media.",
-    "default_prompt": "Please use the web search tool to find and recommend 4 of the most popular and highest-rated movies, TV series, or anime updated, released, or completed within the last 3 months. Focus on the highest popularity and ratings. Ensure the results are strictly from the recent 90 days.",
+    "default_prompt": "[Task] Use the web search tool to recommend the most popular, highest-rated movies / TV series / anime released or concluded within the last 3 months.\n[Count] 4 titles (movies, TV series, or anime).\n[Time] Relative to today's date, within the last 3 months only; for completed series, count from the final episode/season air date.\n[Criteria] Prioritize high popularity and high ratings.",
     "no_results_found": "No results found. Please try a different query.",
     "network_unavailable": "Network unavailable or not configured: check connection or set AI Provider & API Key in Settings, or switch to DuckDuckGo search.",
     "search_error": "An error occurred while searching. Please check your API key.",

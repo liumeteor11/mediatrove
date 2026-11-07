@@ -55,10 +55,12 @@ export const AIConfigPanel: React.FC = () => {
   const [localTmdbKey, setLocalTmdbKey] = useState(getDecryptedTmdbKey());
   const [localBangumiToken, setLocalBangumiToken] = useState(getDecryptedBangumiToken());
   // Trending recommendation config: draft for the custom prompt + size of the
-  // "already recommended" history used to keep every round different.
-  const [trendingPromptDraft, setTrendingPromptDraft] = useState(trendingPrompt || '');
+  // "already recommended" history used to keep every round different. Seed with
+  // the same default template as SearchPage's 编辑提示词 modal so both editors
+  // show identical content for an empty prompt.
+  const [trendingPromptDraft, setTrendingPromptDraft] = useState(trendingPrompt?.trim() || t('search_page.default_prompt'));
   const [trendingHistoryCount, setTrendingHistoryCount] = useState(() => getTrendingHistory().length);
-  useEffect(() => { setTrendingPromptDraft(trendingPrompt || ''); }, [trendingPrompt]);
+  useEffect(() => { setTrendingPromptDraft(trendingPrompt?.trim() || t('search_page.default_prompt')); }, [trendingPrompt]);
   const [showKey, setShowKey] = useState(false);
   // The panel lives inline on the dashboard and spans several screens; keep it
   // collapsed by default with a one-line summary in the header. The choice is
@@ -622,7 +624,11 @@ export const AIConfigPanel: React.FC = () => {
                                     <button
                                         type="button"
                                         onClick={() => {
-                                            setConfig({ trendingPrompt: trendingPromptDraft });
+                                            // Saving the untouched localized default keeps the store
+                                            // empty so the prompt keeps following the UI language
+                                            // instead of being pinned to one language.
+                                            const isDefaultDraft = trendingPromptDraft.trim() === t('search_page.default_prompt').trim();
+                                            setConfig({ trendingPrompt: isDefaultDraft ? '' : trendingPromptDraft });
                                             toast.success(t('common.save_success', { defaultValue: 'Saved' }));
                                         }}
                                         className="px-3 py-1 text-xs rounded-md border-2 border-theme-accent bg-theme-accent text-theme-bg hover:bg-theme-accent-hover transition-colors"

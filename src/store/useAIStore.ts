@@ -375,7 +375,7 @@ export const useAIStore = create<AIConfigState>()(
     }),
     {
       name: 'ai-config-storage',
-      version: 11,
+      version: 12,
       storage: createJSONStorage(() => {
         try {
           if (typeof window !== 'undefined' && window.localStorage) {
@@ -516,6 +516,20 @@ export const useAIStore = create<AIConfigState>()(
               persistedState.reasoningEffort = persistedState.enableDeepThinking === true ? 'high' : 'auto';
             }
             try { delete persistedState.enableDeepThinking; } catch {}
+            // v12: the default trending prompt was restructured into labeled
+            // sections with an explicit "relative to today" time anchor. Users
+            // still sitting on the exact old default text are reset to '' —
+            // an empty prompt now means "follow the localized default" (see
+            // getTrendingMedia), so the prompt keeps following the UI language
+            // instead of being pinned to the old zh/en text. Genuine
+            // customizations are kept untouched.
+            const LEGACY_DEFAULT_PROMPTS = new Set([
+              '请使用联网搜索工具查找并推荐4部最近3个月内更新、上映或完结的最热门、评分最高的电影、电视剧或动漫。重点关注高热度/高人气和高评分的作品。确保结果严格限定在最近90天内。',
+              'Please use the web search tool to find and recommend 4 of the most popular and highest-rated movies, TV series, or anime updated, released, or completed within the last 3 months. Focus on the highest popularity and ratings. Ensure the results are strictly from the recent 90 days.'
+            ]);
+            if (typeof persistedState.trendingPrompt === 'string' && LEGACY_DEFAULT_PROMPTS.has(persistedState.trendingPrompt.trim())) {
+              persistedState.trendingPrompt = '';
+            }
           }
         } catch {}
         return persistedState;

@@ -11,6 +11,22 @@ import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
 
+// Local-date formatting for the prompt time-range templates: toISOString()
+// renders UTC, which shifts the day for UTC+X mornings, and setMonth
+// overflows month-ends (e.g. May 31 → Mar 3) without clamping.
+const localDateStr = (d: Date): string => {
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+const monthsAgoLocal = (months: number): string => {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const expectedMonth = ((d.getMonth() - months) % 12 + 12) % 12;
+    d.setMonth(d.getMonth() - months);
+    if (d.getMonth() !== expectedMonth) d.setDate(0); // clamp to the last valid day
+    return localDateStr(d);
+};
+
 export const SearchPage: React.FC = () => {
   const { t, i18n } = useTranslation();
   const { trendingPrompt, trendingMode, setConfig, enableTrending } = useAIStore();
@@ -513,10 +529,10 @@ export const SearchPage: React.FC = () => {
   };
 
   const savePrompt = async () => {
-      let finalPrompt = tempPrompt;
-
-      // Removed translation logic as requested
-      setConfig({ trendingPrompt: finalPrompt, trendingMode: 'custom' });
+      // Saving the untouched localized default keeps the store empty so the
+      // prompt keeps following the UI language instead of being pinned.
+      const isDefaultDraft = tempPrompt.trim() === t('search_page.default_prompt').trim();
+      setConfig({ trendingPrompt: isDefaultDraft ? '' : tempPrompt, trendingMode: 'custom' });
       setIsPromptModalOpen(false);
       toast.success(t('common.save_success', { defaultValue: "Saved" }));
       // Reload trending with new prompt
@@ -709,10 +725,7 @@ export const SearchPage: React.FC = () => {
                     <span className="text-xs text-theme-subtext self-center">{t('search_page.insert_template')}:</span>
                     <button
                         onClick={() => {
-                            const d = new Date();
-                            d.setMonth(d.getMonth() - 3);
-                            const dateStr = d.toISOString().split('T')[0];
-                            const template = t('search_page.template_date_constraint', { date: dateStr });
+                            const template = t('search_page.template_date_constraint', { date: monthsAgoLocal(3) });
                             setTempPrompt(prev => `${prev} ${template}`.trim());
                         }}
                         className="px-2 py-1 text-xs rounded border border-theme-border bg-theme-bg hover:bg-theme-surface transition-colors text-theme-text"
@@ -721,10 +734,8 @@ export const SearchPage: React.FC = () => {
                     </button>
                     <button
                         onClick={() => {
-                            const d = new Date();
-                            d.setFullYear(d.getFullYear() - 1);
-                            const dateStr = d.toISOString().split('T')[0];
-                            const template = t('search_page.template_date_constraint', { date: dateStr });
+                            // 「今年」= 当年 1 月 1 日起，而不是「12 个月前」。
+                            const template = t('search_page.template_date_constraint', { date: `${new Date().getFullYear()}-01-01` });
                             setTempPrompt(prev => `${prev} ${template}`.trim());
                         }}
                         className="px-2 py-1 text-xs rounded border border-theme-border bg-theme-bg hover:bg-theme-surface transition-colors text-theme-text"
