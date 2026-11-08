@@ -107,6 +107,7 @@ export const CharacterChatPage: React.FC = () => {
       console.error('Character chat failed', e);
       const { auth, detail } = describeAIError(e);
       const messageKey = auth ? 'character_chat.reply_failed_auth'
+        : detail.includes('no-api-key') ? 'character_chat.reply_no_key'
         : detail.includes('empty-ai-response') ? 'character_chat.reply_empty'
         : detail ? 'character_chat.reply_failed_detail'
         : 'character_chat.reply_failed';

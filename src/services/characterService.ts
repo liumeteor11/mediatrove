@@ -638,6 +638,22 @@ export const buildChatRequestMessages = (
 };
 
 /**
+ * True when a chat request would actually have credentials to send. Both AI
+ * paths return "" instead of throwing when no key is set, which used to surface
+ * as the misleading "model returned nothing" toast; a dedicated pre-check lets
+ * the UI point at the missing key instead.
+ */
+const hasUsableApiKey = (): boolean => {
+  const state = useAIStore.getState();
+  if (state.getDecryptedApiKey()?.trim()) return true;
+  try {
+    const envKey = (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env.VITE_MOONSHOT_API_KEY) ? (import.meta as any).env.VITE_MOONSHOT_API_KEY : undefined;
+    if (envKey && envKey !== 'undefined') return true;
+  } catch {}
+  return false;
+};
+
+/**
  * One full chat turn: streams the assistant reply, forwarding each delta to
  * `onDelta`, and resolves with the full text (throws on failure).
  */
@@ -646,6 +662,7 @@ export const sendCharacterMessage = async (
   session: ChatSession,
   onDelta?: (text: string) => void
 ): Promise<string> => {
+  if (!hasUsableApiKey()) throw new Error('no-api-key');
   const messages = buildChatRequestMessages(character, session);
   let reply = '';
   try {

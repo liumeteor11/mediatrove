@@ -499,6 +499,7 @@
     "reply_failed_auth": "The provider rejected the API key (401). Open AI Config to check that the key matches the provider, then re-test the connection.",
     "reply_failed_detail": "Failed to get a reply: {{detail}}",
     "reply_empty": "The model returned nothing — its output budget may have been consumed by reasoning. Raise Max Tokens in AI Config or switch models.",
+    "reply_no_key": "No AI API key is configured. Set one in AI Config before chatting.",
     "adjust_persona": "Adjust persona",
     "adjust_persona_desc": "Tell the character how to behave differently. Saved corrections are injected into every future reply and override the distilled persona.",
     "input_placeholder": "Message {{name}}... (Enter to send, Shift+Enter for a new line)",

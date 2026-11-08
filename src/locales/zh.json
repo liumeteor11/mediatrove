@@ -512,6 +512,7 @@
     "reply_failed_auth": "AI 密钥被服务商拒绝（401）。请到 AI 配置检查服务商与密钥是否匹配，并重新测试连接。",
     "reply_failed_detail": "获取回复失败：{{detail}}",
     "reply_empty": "模型没有返回内容——可能是输出额度被思考过程耗尽，请在 AI 配置中提高最大 Token 数或更换模型。",
+    "reply_no_key": "尚未配置 AI API Key，请先在 AI 配置中设置后再开始对话。",
     "adjust_persona": "调校人格",
     "adjust_persona_desc": "告诉角色应该如何表现。纠偏会注入之后每次回复，且优先于蒸馏出的人设。",
     "input_placeholder": "和 {{name}} 说点什么…（Enter 发送，Shift+Enter 换行）",
