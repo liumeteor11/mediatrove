@@ -94,6 +94,7 @@ interface AIConfigState {
   appendLog: (entry: AIIOLogEntry) => void;
   clearLogs: () => void;
   initialize: () => Promise<void>;
+  importBackendConfig: (config: any) => void;
 }
 
 const encrypt = (text: string) => {
@@ -295,6 +296,45 @@ export const useAIStore = create<AIConfigState>()(
           updates.baseUrl = sanitizeBaseUrl(config.baseUrl || '');
         }
         set((state) => ({ ...state, ...updates }));
+      },
+      // Adopt a backend-provided AI config (e.g. pulled from a sync peer).
+      // Key fields arrive as AES ciphertext under the same static key, so
+      // decrypt them back to plaintext and route through the same encryption
+      // path as setConfig — the persist middleware then mirrors the new state
+      // into localStorage so a reload does not revert the synced config.
+      importBackendConfig: (config: any) => {
+        if (!config || typeof config !== 'object') return;
+        const encryptedFields = [
+          'apiKey', 'vertexSearchApiKey', 'serperApiKey', 'yandexSearchApiKey',
+          'omdbApiKey', 'tmdbApiKey', 'bangumiToken', 'proxyPassword',
+        ] as const;
+        const updates: any = {};
+        for (const [key, value] of Object.entries(config)) {
+          if (value === null || value === undefined) continue;
+          if ((encryptedFields as readonly string[]).includes(key)) {
+            updates[key] = decrypt(String(value));
+          } else {
+            updates[key] = value;
+          }
+        }
+        // Search-engine migrations mirror initialize(): a sunset/incomplete
+        // engine must not survive a config sync.
+        if (String(updates.searchProvider || '') === 'google') {
+          updates.searchProvider = 'vertex';
+          if (!updates.vertexSearchApiKey && updates.googleSearchApiKey) {
+            updates.vertexSearchApiKey = updates.googleSearchApiKey;
+          }
+        }
+        const engine = String(updates.searchProvider || '');
+        const engineConfigured =
+          (engine === 'vertex' && !!updates.vertexSearchApiKey && !!updates.vertexSearchProject && !!updates.vertexSearchEngine) ||
+          (engine === 'serper' && !!updates.serperApiKey) ||
+          (engine === 'deepseek' && updates.provider === 'deepseek' && !!updates.apiKey) ||
+          (engine === 'yandex' && !!updates.yandexSearchApiKey && !!updates.yandexSearchLogin);
+        if (engine && engine !== 'duckduckgo' && !engineConfigured) {
+          updates.searchProvider = 'duckduckgo';
+        }
+        set((state) => ({ ...state, ...updates, apiKeyProvider: updates.apiKey ? (updates.provider ?? state.provider) : state.apiKeyProvider }));
       },
       getDecryptedApiKey: () => decrypt(get().apiKey),
       getDecryptedVertexKey: () => decrypt(get().vertexSearchApiKey),

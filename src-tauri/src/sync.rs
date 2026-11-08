@@ -242,7 +242,32 @@ async fn get_data(headers: HeaderMap, State(state): State<SyncState>, axum::extr
         return Err(StatusCode::BAD_REQUEST);
     }
     let items = state.db.get_user_items(&username).unwrap_or_default();
-    Ok(Json(serde_json::json!({ "items": items })))
+
+    // Opt-in full profile: characters, chats and app config (AI keys) are
+    // sensitive, so they travel as one AES-256-GCM blob keyed from the
+    // pairing code instead of plaintext JSON. Absent for old clients that
+    // never ask for it.
+    let mut body = serde_json::json!({ "items": items });
+    if params.get("include").map(|v| v == "config").unwrap_or(false) {
+        let token = state.db.get_sync_token();
+        let characters = state.db.get_characters_for_user(&username).unwrap_or_default();
+        let chat_sessions = state.db.get_chat_sessions_for_user(&username).unwrap_or_default();
+        let (ai_config, theme_config) = state.db.get_configs().unwrap_or((None, None));
+        let profile = serde_json::json!({
+            "characters": characters,
+            "chatSessions": chat_sessions,
+            "aiConfig": ai_config,
+            "themeConfig": theme_config,
+        });
+        match crate::crypto::encrypt_profile(&crate::crypto::derive_key(&token), &profile) {
+            Ok(encoded) => body["profile"] = serde_json::Value::String(encoded),
+            Err(e) => {
+                eprintln!("Failed to encrypt sync profile: {e}");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+    }
+    Ok(Json(body))
 }
 
 async fn receive_data(headers: HeaderMap, State(state): State<SyncState>, Json(payload): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, StatusCode> {

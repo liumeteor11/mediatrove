@@ -22,6 +22,7 @@ mod models;
 mod database;
 mod sync;
 mod mcp;
+mod crypto;
 use mcp::McpState;
 
 const SEARCH_CACHE_TTL_MS: u64 = 2 * 60 * 60 * 1000;
@@ -1886,12 +1887,15 @@ fn mcp_chat_reply(
 }
 
 #[command]
-async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, db: State<'_, Arc<Database>>) -> Result<(), String> {
+async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, include_config: bool, db: State<'_, Arc<Database>>) -> Result<(), String> {
     let token = db.get_sync_token();
     if token.is_empty() {
         return Err("sync_token_not_set".to_string());
     }
-    let url = format!("http://{}:{}/sync/data?user={}", peer_ip, peer_port, urlencoding::encode(&username));
+    let mut url = format!("http://{}:{}/sync/data?user={}", peer_ip, peer_port, urlencoding::encode(&username));
+    if include_config {
+        url.push_str("&include=config");
+    }
     // LAN peers must be reached directly: the system proxy (if any) has no
     // route to them and turns every sync into a connection error.
     let client = reqwest::Client::builder()
@@ -1915,6 +1919,37 @@ async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, db: S
     let items: Vec<MediaItem> = serde_json::from_value(body.get("items").cloned().unwrap_or(serde_json::Value::Null))
         .map_err(|e| e.to_string())?;
     db.merge_user_items(&username, items)?;
+
+    // Optional encrypted profile (characters, chats, app config). The peer
+    // sends it only when asked and only in the agreed pairing-code encoding;
+    // decrypt fully before applying anything so a failure leaves local data
+    // untouched. Old peers simply omit the field.
+    if include_config {
+        if let Some(encoded) = body.get("profile").and_then(|v| v.as_str()) {
+            let key = crate::crypto::derive_key(&token);
+            let profile = crate::crypto::decrypt_profile(&key, encoded)
+                .map_err(|_| "sync_config_decrypt_failed: peer profile could not be decrypted (pairing code mismatch?)".to_string())?;
+            let characters: Vec<DistilledCharacter> = serde_json::from_value(
+                profile.get("characters").cloned().unwrap_or(serde_json::Value::Null),
+            ).map_err(|e| format!("sync profile invalid characters: {e}"))?;
+            let sessions: Vec<ChatSession> = serde_json::from_value(
+                profile.get("chatSessions").cloned().unwrap_or(serde_json::Value::Null),
+            ).map_err(|e| format!("sync profile invalid chat sessions: {e}"))?;
+            let ai_config: Option<AIConfig> = serde_json::from_value(
+                profile.get("aiConfig").cloned().unwrap_or(serde_json::Value::Null),
+            ).map_err(|e| format!("sync profile invalid ai config: {e}"))?;
+            let theme_config: Option<ThemeConfig> = serde_json::from_value(
+                profile.get("themeConfig").cloned().unwrap_or(serde_json::Value::Null),
+            ).map_err(|e| format!("sync profile invalid theme config: {e}"))?;
+            db.merge_characters_for_user(&username, characters)?;
+            db.merge_chat_sessions_for_user(&username, sessions)?;
+            // The peer's settings win so a fresh device ends up fully
+            // configured; nothing to apply when the peer has no config yet.
+            if ai_config.is_some() || theme_config.is_some() {
+                db.save_configs(ai_config, theme_config)?;
+            }
+        }
+    }
     Ok(())
 }
 

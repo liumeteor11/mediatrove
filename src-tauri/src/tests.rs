@@ -805,3 +805,119 @@ fn test_ai_config_serde_defaults_for_legacy_fields() {
     assert_eq!(cfg.google_search_cx, "");
     assert_eq!(cfg.reasoning_effort, "auto", "reasoningEffort keeps its default too");
 }
+
+#[test]
+fn test_crypto_profile_roundtrip() {
+    let key = crate::crypto::derive_key("TEST-CODE-123");
+    let profile = serde_json::json!({
+        "characters": [{"id": "c1", "name": "Hero", "version": 2}],
+        "chatSessions": [],
+        "aiConfig": {"apiKey": "encrypted-blob"},
+        "themeConfig": null,
+    });
+
+    let encoded = crate::crypto::encrypt_profile(&key, &profile).unwrap();
+    // Wire format: hex(nonce || ciphertext), no plaintext anywhere.
+    assert!(!encoded.contains("Hero"), "ciphertext must not leak plaintext");
+    assert!(hex::decode(&encoded).is_ok());
+
+    let decoded = crate::crypto::decrypt_profile(&key, &encoded).unwrap();
+    assert_eq!(decoded, profile, "roundtrip must restore the profile");
+
+    // Wrong pairing code (different key) must fail the GCM tag check.
+    let wrong = crate::crypto::derive_key("OTHER-CODE");
+    assert!(crate::crypto::decrypt_profile(&wrong, &encoded).is_err());
+
+    // Tampered ciphertext must fail too.
+    let mut tampered = encoded.clone();
+    let last = tampered.pop().unwrap();
+    tampered.push(if last == '0' { '1' } else { '0' });
+    assert!(crate::crypto::decrypt_profile(&key, &tampered).is_err());
+}
+
+#[test]
+fn test_merge_characters_version_wins() {
+    let path = std::env::temp_dir().join(format!("mediatrove_test_merge_char_{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let db = crate::database::Database::new_at_path(path.clone());
+
+    let make = |id: &str, version: u32, tagline: &str| crate::models::DistilledCharacter {
+        id: id.into(),
+        name: "Test Pilot".into(),
+        aliases: vec![],
+        source_title: "Test".into(),
+        source_media_id: None,
+        source_type: None,
+        tagline: Some(tagline.into()),
+        appearance: None,
+        personality: vec![],
+        mental_models: vec![],
+        decision_heuristics: vec![],
+        interpersonal: None,
+        boundaries: vec![],
+        background: None,
+        expression: None,
+        relationships: vec![],
+        quotes: vec![],
+        external_views: vec![],
+        timeline: vec![],
+        corrections: vec![],
+        version,
+        avatar_url: None,
+        greeting: None,
+        created_at: 0.0,
+        updated_at: 0.0,
+    };
+
+    db.merge_characters_for_user("u", vec![make("c1", 3, "newer remote")]).unwrap();
+    // Same version: local copy untouched. Lower version: ignored.
+    db.merge_characters_for_user("u", vec![make("c1", 3, "same version"), make("c1", 1, "older")]).unwrap();
+    let chars = db.get_characters_for_user("u").unwrap();
+    assert_eq!(chars.len(), 1);
+    assert_eq!(chars[0].version, 3);
+    assert_eq!(chars[0].tagline.as_deref(), Some("newer remote"));
+
+    // Higher version replaces.
+    db.merge_characters_for_user("u", vec![make("c1", 4, "newest")]).unwrap();
+    let chars = db.get_characters_for_user("u").unwrap();
+    assert_eq!(chars[0].version, 4);
+    assert_eq!(chars[0].tagline.as_deref(), Some("newest"));
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_merge_chat_sessions_newer_wins() {
+    let path = std::env::temp_dir().join(format!("mediatrove_test_merge_sess_{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let db = crate::database::Database::new_at_path(path.clone());
+
+    let make = |id: &str, updated: f64, summary: Option<&str>| crate::models::ChatSession {
+        id: id.into(),
+        character_id: "c1".into(),
+        title: "Session".into(),
+        messages: vec![],
+        summary: summary.map(str::to_string),
+        summarized_up_to: 0,
+        created_at: 0.0,
+        updated_at: updated,
+    };
+
+    db.merge_chat_sessions_for_user("u", vec![make("s1", 100.0, Some("older"))]).unwrap();
+    // Older incoming session must not clobber the local newer one.
+    db.merge_chat_sessions_for_user("u", vec![make("s1", 50.0, Some("much older"))]).unwrap();
+    let sessions = db.get_chat_sessions_for_user("u").unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].summary.as_deref(), Some("older"));
+
+    // Newer incoming session replaces.
+    db.merge_chat_sessions_for_user("u", vec![make("s1", 200.0, Some("newest"))]).unwrap();
+    // Unknown id is added.
+    db.merge_chat_sessions_for_user("u", vec![make("s2", 10.0, None)]).unwrap();
+    let sessions = db.get_chat_sessions_for_user("u").unwrap();
+    assert_eq!(sessions.len(), 2);
+    let s1 = sessions.iter().find(|s| s.id == "s1").unwrap();
+    assert_eq!(s1.summary.as_deref(), Some("newest"));
+
+    let _ = std::fs::remove_file(&path);
+}

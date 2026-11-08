@@ -247,6 +247,44 @@ impl Database {
         self.save()
     }
 
+    /// Merge remotely synced characters: same id keeps the higher `version`
+    /// (bumped on every re-distillation / correction), unknown ids are added.
+    pub fn merge_characters_for_user(&self, username: &str, incoming: Vec<DistilledCharacter>) -> Result<(), String> {
+        let mut data = self.cache.lock().map_err(|e| e.to_string())?;
+        let list = data.characters_by_user.entry(username.to_string()).or_default();
+        for character in incoming {
+            match list.iter_mut().find(|c| c.id == character.id) {
+                Some(existing) => {
+                    if character.version > existing.version {
+                        *existing = character;
+                    }
+                }
+                None => list.insert(0, character),
+            }
+        }
+        drop(data);
+        self.save()
+    }
+
+    /// Merge remotely synced chat sessions: same id keeps the newer
+    /// `updated_at`, unknown ids are added.
+    pub fn merge_chat_sessions_for_user(&self, username: &str, incoming: Vec<ChatSession>) -> Result<(), String> {
+        let mut data = self.cache.lock().map_err(|e| e.to_string())?;
+        let list = data.chat_sessions_by_user.entry(username.to_string()).or_default();
+        for session in incoming {
+            match list.iter_mut().find(|s| s.id == session.id) {
+                Some(existing) => {
+                    if session.updated_at > existing.updated_at {
+                        *existing = session;
+                    }
+                }
+                None => list.insert(0, session),
+            }
+        }
+        drop(data);
+        self.save()
+    }
+
     // --- Character chat sessions ---
     pub fn get_chat_sessions_for_user(&self, username: &str) -> Result<Vec<ChatSession>, String> {
         let data = self.cache.lock().map_err(|e| e.to_string())?;

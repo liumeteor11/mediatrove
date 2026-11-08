@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore } from '../store/useAuthStore';
+import { useAIStore } from '../store/useAIStore';
+import { useThemeStore } from '../store/useThemeStore';
 
 interface PeerInfo {
     name: string;
@@ -20,6 +22,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncToken, setSyncToken] = useState<string>('');
     const [tokenInput, setTokenInput] = useState<string>('');
+    const [includeConfig, setIncludeConfig] = useState<boolean>(false);
 
     useEffect(() => {
         if (isOpen) {
@@ -91,7 +94,19 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
         setStatus(`Syncing with ${peer.name}...`);
         try {
             const username = useAuthStore.getState().user?.username || 'guest';
-            await invoke('sync_with_peer', { peerIp: peer.ip, peerPort: peer.port, username });
+            await invoke('sync_with_peer', { peerIp: peer.ip, peerPort: peer.port, username, includeConfig: includeConfig });
+            if (includeConfig) {
+                // The synced config now lives in the backend, but the webview
+                // stores treat localStorage as the source of truth on reload —
+                // adopt the synced values here so the reload keeps them.
+                try {
+                    const [aiConfig, themeConfig] = await invoke<[any, any]>('get_app_configs');
+                    if (aiConfig) useAIStore.getState().importBackendConfig(aiConfig);
+                    if (themeConfig && themeConfig.theme) useThemeStore.getState().setTheme(themeConfig.theme);
+                } catch (e) {
+                    console.error('Failed to adopt synced config into stores', e);
+                }
+            }
             setStatus('Sync Completed!');
             setTimeout(() => {
                 window.location.reload();
@@ -100,6 +115,8 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
             const msg = String(e);
             setStatus(msg.includes('sync_auth_failed')
                 ? 'Sync Failed: pairing code mismatch. Set the same code on both devices.'
+                : msg.includes('sync_config_decrypt_failed')
+                ? 'Sync Failed: could not decrypt the peer profile. Both devices must use the same pairing code.'
                 : 'Sync Failed: ' + msg);
         } finally {
             setIsSyncing(false);
@@ -148,6 +165,19 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                         Both devices must use the same code. Copy it from this device and paste it on the peer, or set a code you both agree on.
                     </p>
                 </div>
+
+                <label className="flex items-start gap-2 mb-4 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={includeConfig}
+                        onChange={(e) => setIncludeConfig(e.target.checked)}
+                        disabled={isSyncing}
+                        className="mt-0.5 w-4 h-4 accent-blue-600"
+                    />
+                    <span className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                        Also sync app config — AI keys, distilled characters and chats (encrypted with the pairing code). Peer settings overwrite yours; both devices must use the same pairing code.
+                    </span>
+                </label>
                 
                 <div className="min-h-[200px] max-h-[300px] overflow-y-auto border rounded p-2 mb-4 bg-gray-50 dark:bg-gray-900 dark:border-gray-700">
                     {peers.length === 0 ? (
