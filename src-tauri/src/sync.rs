@@ -9,9 +9,16 @@ use serde::{Deserialize, Serialize};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Fires after a peer pushed data into this instance, so the frontend can
+/// refresh its stores. Same decoupled-callback pattern as `mcp::NotifyFn`:
+/// mentioning the Tauri AppHandle here would drag the GUI stack into the test
+/// binary.
+pub type SyncNotifyFn = dyn Fn(&str, &str) + Send + Sync;
+
 #[derive(Clone)]
 pub struct SyncState {
     pub db: Arc<Database>,
+    pub notify: Option<Arc<SyncNotifyFn>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -28,6 +35,9 @@ pub struct SyncService {
     port: u16,
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
     running: Arc<AtomicBool>,
+    /// Our own mDNS instance fullname (`MediaTrove_{hostname}`) so discovery
+    /// can skip advertising ourselves back to us.
+    own_instance: Arc<RwLock<Option<String>>>,
 }
 
 impl SyncService {
@@ -38,54 +48,66 @@ impl SyncService {
             port: 14567,
             peers: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(AtomicBool::new(false)),
+            own_instance: Arc::new(RwLock::new(None)),
         }
     }
 
-    pub async fn start_server(&self, db: Arc<Database>) {
+    pub async fn start_server(&self, db: Arc<Database>, notify: Option<Arc<SyncNotifyFn>>) {
         if self.running.load(Ordering::SeqCst) {
             println!("Sync server already running");
             return;
         }
-        
-        let state = SyncState { db };
+
+        let state = SyncState { db, notify };
 
         let app = Router::new()
             .route("/sync/data", get(get_data).post(receive_data))
             .with_state(state);
 
-        let ip = local_ip().unwrap_or("0.0.0.0".parse().unwrap());
-        let addr = SocketAddr::from((ip, self.port));
-        
+        // Bind on all interfaces: local_ip() can land on a virtual adapter
+        // (VPN/proxy TUN), which LAN peers would never reach.
+        let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
+
         println!("Starting Sync Server on {}", addr);
-        
-        // Announce via mDNS
-        let hostname = get_hostname();
-        let service_type = "_mediatrove._tcp.local.";
-        let instance_name = format!("MediaTrove_{}", hostname);
-        let host_ipv4 = ip.to_string();
 
-        let service_info = ServiceInfo::new(
-            service_type,
-            &instance_name,
-            &format!("{}.local.", hostname),
-            &host_ipv4,
-            self.port,
-            [("version", "1")].as_slice()
-        ).expect("Valid service info");
-        
-        if let Err(e) = self.mdns.register(service_info) {
-            eprintln!("Failed to register mDNS: {}", e);
-        }
-
-        // Start Discovery in background
-        self.start_discovery();
-
-        // Run server
+        // Run server first; only announce via mDNS once the port is bound so a
+        // failed bind never leaves a stale advertisement behind.
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => {
                 self.running.store(true, Ordering::SeqCst);
+
+                let hostname = get_hostname();
+                let service_type = "_mediatrove._tcp.local.";
+                let instance_name = format!("MediaTrove_{}", hostname);
+
+                if let Some(ip) = select_advertise_ip(local_ip().ok()) {
+                    let service_info = ServiceInfo::new(
+                        service_type,
+                        &instance_name,
+                        &format!("{}.local.", hostname),
+                        &ip.to_string(),
+                        self.port,
+                        [("version", "1")].as_slice()
+                    ).expect("Valid service info");
+
+                    if let Err(e) = self.mdns.register(service_info) {
+                        eprintln!("Failed to register mDNS: {}", e);
+                    }
+                } else {
+                    eprintln!("No routable IPv4 address found; skipping mDNS advertisement");
+                }
+                if let Ok(mut own) = self.own_instance.write() {
+                    *own = Some(instance_name.clone());
+                }
+
+                // Start Discovery in background
+                self.start_discovery();
+
                 if let Err(e) = axum::serve(listener, app).await {
                     eprintln!("Server error: {}", e);
+                }
+                if let Ok(mut own) = self.own_instance.write() {
+                    *own = None;
                 }
                 self.running.store(false, Ordering::SeqCst);
             },
@@ -96,6 +118,7 @@ impl SyncService {
     fn start_discovery(&self) {
         let mdns = self.mdns.clone();
         let peers = self.peers.clone();
+        let own_instance = self.own_instance.clone();
         let service_type = "_mediatrove._tcp.local.";
 
         std::thread::spawn(move || {
@@ -104,21 +127,36 @@ impl SyncService {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
                          let fullname = info.get_fullname().to_string();
-                         // Ignore self if possible, but IP check is easier later
-                         let ip = info.get_addresses().iter().next().map(|ip| ip.to_string()).unwrap_or_default();
+                         // Skip ourselves. The announced fullname is
+                         // `{instance}.{service_type}`, so match on that prefix.
+                         let is_own = own_instance
+                             .read()
+                             .ok()
+                             .and_then(|own| own.as_deref().map(|own| fullname.starts_with(&format!("{own}."))))
+                             .unwrap_or(false);
+                         if is_own {
+                             continue;
+                         }
+                         // Sync targets IPv4 LAN peers only: an IPv6 (or
+                         // loopback) address cannot be spliced into the
+                         // http://ip:port URL the client will call.
+                         let addr = info
+                             .get_addresses()
+                             .iter()
+                             .find(|ip| ip.is_ipv4() && !ip.is_loopback())
+                             .map(|ip| ip.to_string());
+                         let Some(ip) = addr else { continue; };
                          let port = info.get_port();
                          let hostname = info.get_hostname().to_string();
-                         
-                         if !ip.is_empty() {
-                             let p = PeerInfo { 
-                                 name: hostname, 
-                                 ip, 
-                                 port,
-                                 last_seen: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
-                             };
-                             if let Ok(mut guard) = peers.write() {
-                                 guard.insert(fullname, p);
-                             }
+
+                         let p = PeerInfo {
+                             name: hostname,
+                             ip,
+                             port,
+                             last_seen: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+                         };
+                         if let Ok(mut guard) = peers.write() {
+                             guard.insert(fullname, p);
                          }
                     },
                     ServiceEvent::ServiceRemoved(_type, fullname) => {
@@ -139,6 +177,45 @@ impl SyncService {
             Vec::new()
         }
     }
+}
+
+/// Pick the IPv4 address to advertise over mDNS. `local_ip()` follows the
+/// default route and can land on a virtual adapter (VPN/proxy TUN ranges like
+/// 198.18.0.0/15), which LAN peers cannot reach — so it is only used when it
+/// passes the routability filter; otherwise the first acceptable interface
+/// address wins.
+pub(crate) fn select_advertise_ip(local_ip: Option<std::net::IpAddr>) -> Option<std::net::IpAddr> {
+    let candidates = local_ip_address::list_afinet_netifas()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, ip)| ip)
+        .collect();
+    select_advertise_ip_from(local_ip, candidates)
+}
+
+/// Pure selection logic over a candidate list; split out for unit tests.
+pub(crate) fn select_advertise_ip_from(
+    local_ip: Option<std::net::IpAddr>,
+    candidates: Vec<std::net::IpAddr>,
+) -> Option<std::net::IpAddr> {
+    let is_routable_lan = |ip: std::net::IpAddr| -> bool {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                let o = v4.octets();
+                !v4.is_loopback()
+                    && !v4.is_link_local()
+                    && !(o[0] == 198 && o[1] >= 18 && o[1] <= 19) // 198.18.0.0/15 benchmark
+            }
+            std::net::IpAddr::V6(_) => false,
+        }
+    };
+
+    if let Some(ip) = local_ip {
+        if is_routable_lan(ip) {
+            return Some(ip);
+        }
+    }
+    candidates.into_iter().find(|ip| is_routable_lan(*ip))
 }
 
 fn get_hostname() -> String {
@@ -178,5 +255,8 @@ async fn receive_data(headers: HeaderMap, State(state): State<SyncState>, Json(p
         payload.get("items").cloned().unwrap_or(serde_json::Value::Null)
     ).map_err(|_| StatusCode::BAD_REQUEST)?;
     state.db.merge_user_items(&username, items).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(notify) = &state.notify {
+        notify(&username, "sync");
+    }
     Ok(Json(serde_json::json!({"ok": true})))
 }

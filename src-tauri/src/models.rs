@@ -276,9 +276,13 @@ pub struct AIConfig {
     pub enable_search: bool,
     #[serde(rename = "searchProvider")]
     pub search_provider: String,
-    #[serde(rename = "googleSearchApiKey")]
+    // Legacy Vertex-search fields: the frontend migrated to vertexSearchApiKey
+    // and no longer sends these, so they must stay optional or every
+    // save_ai_config call fails to deserialize and the config is never
+    // persisted.
+    #[serde(rename = "googleSearchApiKey", default)]
     pub google_search_api_key: String,
-    #[serde(rename = "googleSearchCx")]
+    #[serde(rename = "googleSearchCx", default)]
     pub google_search_cx: String,
     #[serde(rename = "serperApiKey")]
     pub serper_api_key: String,

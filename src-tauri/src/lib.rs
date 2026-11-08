@@ -1,4 +1,4 @@
-use tauri::{command, AppHandle, State, Manager};
+use tauri::{command, AppHandle, State, Manager, Emitter};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1757,11 +1757,19 @@ fn login_user(username: String, password: String, db: State<Arc<Database>>) -> R
 // --- Sync Commands ---
 
 #[command]
-async fn start_sync_server(sync: State<'_, sync::SyncService>, db: State<'_, Arc<Database>>) -> Result<(), String> {
-    let db = db.inner().clone(); 
+async fn start_sync_server(app: tauri::AppHandle, sync: State<'_, sync::SyncService>, db: State<'_, Arc<Database>>) -> Result<(), String> {
+    let db = db.inner().clone();
     let sync = sync.inner().clone();
+    // Decoupled callback (same rationale as mcp::NotifyFn): keeps the Tauri
+    // AppHandle out of sync.rs so the test binary stays GUI-free.
+    let notify: Arc<sync::SyncNotifyFn> = Arc::new(move |username: &str, action: &str| {
+        let _ = app.emit(
+            "mcp:data-changed",
+            serde_json::json!({ "username": username, "action": action }),
+        );
+    });
     tokio::spawn(async move {
-        sync.start_server(db).await;
+        sync.start_server(db, Some(notify)).await;
     });
     Ok(())
 }
@@ -1817,18 +1825,41 @@ fn mcp_set_config(
         port,
         username,
     };
+    let was_running = mcp.running.load(std::sync::atomic::Ordering::SeqCst);
+    let bound_port = mcp.port.load(std::sync::atomic::Ordering::SeqCst);
     db.set_mcp_config(config.clone())?;
-    // Hot reload: restart or stop the server to match the new config.
+    // Hot reload. The username is read from the database on every tool call,
+    // so only the socket lifecycle needs a restart here: keep the server
+    // running untouched when the port is unchanged (rebinding the same port
+    // races with the old listener releasing it), and only start/stop on an
+    // actual enable/disable or port change.
     if config.enabled {
-        mcp.start(&app, db.inner().clone(), &config, chat_pending.inner().clone());
-    } else {
+        if !was_running || bound_port != config.port {
+            mcp.start(&app, db.inner().clone(), &config, chat_pending.inner().clone());
+        }
+    } else if was_running {
         mcp.stop();
     }
-    let running = mcp.running.load(std::sync::atomic::Ordering::SeqCst);
+    // After a fresh start, give the bind a moment to settle so the returned
+    // status reflects reality instead of the previous incarnation's flags.
+    let started_now = config.enabled && (!was_running || bound_port != config.port);
+    let running = if started_now {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        loop {
+            let running = mcp.running.load(std::sync::atomic::Ordering::SeqCst);
+            if running || std::time::Instant::now() >= deadline {
+                break running;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    } else {
+        mcp.running.load(std::sync::atomic::Ordering::SeqCst)
+    };
+    let bound_port = mcp.port.load(std::sync::atomic::Ordering::SeqCst);
     Ok(McpStatus {
         enabled: config.enabled,
         running,
-        port: config.port,
+        port: if running && bound_port > 0 { bound_port } else { config.port },
         username: config.username,
         endpoint: format!("http://127.0.0.1:{}/mcp", config.port),
     })
@@ -1861,18 +1892,24 @@ async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, db: S
         return Err("sync_token_not_set".to_string());
     }
     let url = format!("http://{}:{}/sync/data?user={}", peer_ip, peer_port, urlencoding::encode(&username));
+    // LAN peers must be reached directly: the system proxy (if any) has no
+    // route to them and turns every sync into a connection error.
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
-        
+
     let resp = client.get(&url)
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
         .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("sync_auth_failed: {}", resp.status()));
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(format!("sync_auth_failed: {}", resp.status()));
+        }
+        return Err(format!("sync_peer_error: {}", resp.status()));
     }
     let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     let items: Vec<MediaItem> = serde_json::from_value(body.get("items").cloned().unwrap_or(serde_json::Value::Null))

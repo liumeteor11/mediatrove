@@ -664,3 +664,144 @@ fn test_io_log_append_and_rotate() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_mcp_is_local_request_origin_forms() {
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (k, v) in pairs {
+            map.insert(
+                axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        map
+    }
+
+    // Host header (bare authority form) — unchanged behavior.
+    assert!(crate::mcp::is_local_request(&headers(&[("Host", "127.0.0.1:8787")])));
+    assert!(crate::mcp::is_local_request(&headers(&[("Host", "localhost:8787")])));
+    assert!(!crate::mcp::is_local_request(&headers(&[("Host", "evil.example.com")])));
+
+    // Origin arrives as a full URL from browsers: the host, not the scheme,
+    // must be extracted. `http://localhost:9999` used to be rejected because
+    // the check read the scheme as the host.
+    assert!(crate::mcp::is_local_request(&headers(&[
+        ("Host", "127.0.0.1:8787"),
+        ("Origin", "http://localhost:9999"),
+    ])));
+    assert!(crate::mcp::is_local_request(&headers(&[
+        ("Host", "127.0.0.1:8787"),
+        ("Origin", "http://127.0.0.1"),
+    ])));
+    assert!(!crate::mcp::is_local_request(&headers(&[
+        ("Host", "127.0.0.1:8787"),
+        ("Origin", "http://evil.com"),
+    ])));
+    // DNS-rebinding style hostname that merely contains "localhost".
+    assert!(!crate::mcp::is_local_request(&headers(&[
+        ("Host", "127.0.0.1:8787"),
+        ("Origin", "http://localhost.evil.com"),
+    ])));
+    // The string "null" (sandboxed iframe origin) is not a local authority.
+    assert!(!crate::mcp::is_local_request(&headers(&[
+        ("Host", "127.0.0.1:8787"),
+        ("Origin", "null"),
+    ])));
+    // Absent headers (non-browser client) stay allowed.
+    assert!(crate::mcp::is_local_request(&headers(&[])));
+}
+
+#[test]
+fn test_sync_select_advertise_ip_filters() {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    let lan = IpAddr::V4(Ipv4Addr::new(192, 168, 5, 9));
+    let lan2 = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
+    let tun = IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)); // benchmark range
+    let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let link_local = IpAddr::V4(Ipv4Addr::new(169, 254, 1, 2));
+    let v6 = IpAddr::V6("fe80::1".parse().unwrap());
+
+    let sel = crate::sync::select_advertise_ip_from;
+
+    // The default-route IP (local_ip) is preferred when it is a real LAN addr.
+    assert_eq!(sel(Some(lan), vec![lan, lan2]), Some(lan), "routable local_ip kept");
+    // A TUN/loopback/link-local default route falls back to the interfaces.
+    assert_eq!(sel(Some(tun), vec![lan, lan2]), Some(lan));
+    assert_eq!(sel(Some(loopback), vec![lan, lan2]), Some(lan));
+    assert_eq!(sel(Some(link_local), vec![lan2, lan]), Some(lan2), "first candidate wins");
+    // Benchmark-range interface candidates are filtered out as well.
+    assert_eq!(sel(None, vec![tun, lan]), Some(lan));
+    // IPv6 and unroutable candidates never win.
+    assert_eq!(sel(None, vec![v6, loopback, link_local, tun]), None);
+    assert_eq!(sel(None, vec![]), None, "no candidates, no local_ip -> None");
+}
+
+#[tokio::test]
+async fn test_mcp_bind_listener_retry_recovers() {
+    use std::time::Duration;
+
+    // Port 0 (OS-assigned) always binds on the first attempt.
+    let (listener, port) =
+        crate::mcp::bind_listener_with_retry(0, 3, Duration::from_millis(10)).await.unwrap();
+
+    // While the port is held, retries are exhausted and the error surfaces.
+    assert!(
+        crate::mcp::bind_listener_with_retry(port, 2, Duration::from_millis(20)).await.is_err(),
+        "binding a held port must fail after exhausting retries"
+    );
+
+    // Release and immediately rebind: the retry loop bridges the window where
+    // the OS has not fully released the port (the hot-reload race).
+    drop(listener);
+    let (_rebound, bound_port) =
+        crate::mcp::bind_listener_with_retry(port, 10, Duration::from_millis(50)).await.unwrap();
+    assert_eq!(bound_port, port);
+}
+
+#[test]
+fn test_ai_config_serde_defaults_for_legacy_fields() {
+    // The frontend migrated googleSearchApiKey/Cx to vertexSearchApiKey and no
+    // longer sends the legacy fields; the AIConfig payload must still load.
+    let json = serde_json::json!({
+        "provider": "deepseek",
+        "apiKey": "encrypted-blob",
+        "model": "deepseek-flash",
+        "baseUrl": "https://api.deepseek.com",
+        "maxTokens": 2000,
+        "systemPrompt": "p",
+        "enableSearch": true,
+        "searchProvider": "duckduckgo",
+        "serperApiKey": "",
+        "yandexSearchApiKey": "",
+        "yandexSearchLogin": "",
+        "omdbApiKey": "",
+        "tmdbApiKey": "",
+        "bangumiToken": "",
+        "enableTmdb": true,
+        "enableBangumi": true,
+        "enableNetworking": true,
+        "enableTrending": true,
+        "trendingPrompt": "t",
+        "useSystemProxy": false,
+        "proxyProtocol": "http",
+        "proxyHost": "",
+        "proxyPort": "",
+        "proxyUsername": "",
+        "proxyPassword": "",
+        "authoritativeDomains": {
+            "movie_tv": [],
+            "book": [],
+            "comic": [],
+            "music": [],
+            "poster": []
+        }
+    });
+    let cfg: crate::models::AIConfig = serde_json::from_value(json).unwrap();
+    assert_eq!(cfg.google_search_api_key, "");
+    assert_eq!(cfg.google_search_cx, "");
+    assert_eq!(cfg.reasoning_effort, "auto", "reasoningEffort keeps its default too");
+}

@@ -79,11 +79,13 @@ impl McpState {
         let router = build_router(app.clone(), pending, db);
         let running = self.running.clone();
         let port = config.port;
-        running.store(true, Ordering::SeqCst);
         self.port.store(port, Ordering::SeqCst);
         let handle = tauri::async_runtime::spawn(async move {
-            match bind_listener(port).await {
+            // Retry the bind: a config change restarts the server on the same
+            // port while the old listener may still be releasing it.
+            match bind_listener_with_retry(port, BIND_RETRY_ATTEMPTS, BIND_RETRY_DELAY).await {
                 Ok((listener, bound)) => {
+                    running.store(true, Ordering::SeqCst);
                     println!("MCP server listening on http://127.0.0.1:{bound}/mcp");
                     serve_listener(listener, router).await;
                 }
@@ -97,6 +99,31 @@ impl McpState {
             *t = Some(handle);
         }
     }
+}
+
+/// How often/long `bind_listener_with_retry` waits for a just-released port.
+pub(crate) const BIND_RETRY_ATTEMPTS: usize = 10;
+pub(crate) const BIND_RETRY_DELAY: Duration = Duration::from_millis(150);
+
+/// Bind the MCP listener on 127.0.0.1, retrying while the port is still being
+/// released by a previous incarnation. Port 0 lets the OS pick a free port
+/// (used by tests); the assigned port is returned with the listener.
+pub(crate) async fn bind_listener_with_retry(
+    port: u16,
+    attempts: usize,
+    delay: Duration,
+) -> std::io::Result<(tokio::net::TcpListener, u16)> {
+    let mut last_err = None;
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            tokio::time::sleep(delay).await;
+        }
+        match bind_listener(port).await {
+            Ok(pair) => return Ok(pair),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("bind failed with no error")))
 }
 
 /// Bind the MCP listener on 127.0.0.1. Port 0 lets the OS pick a free port
@@ -227,15 +254,24 @@ fn tool_error(message: String) -> Value {
 /// True when the Host (and Origin, if present) headers refer to this machine.
 /// Streamable HTTP servers should validate this to block DNS-rebinding
 /// attacks from random websites talking to the localhost port.
-fn is_local_request(headers: &HeaderMap) -> bool {
+pub(crate) fn is_local_request(headers: &HeaderMap) -> bool {
     let allowed = ["localhost", "127.0.0.1", "[::1]", "::1"];
     let check = |value: Option<&HeaderValue>| -> bool {
         match value {
             None => true, // header absent (non-browser client) — allow
             Some(v) => {
-                let host = v.to_str().unwrap_or("").to_ascii_lowercase();
-                let bare = host.split(':').next().unwrap_or("").to_string();
-                allowed.iter().any(|a| host == *a || bare == *a)
+                let authority = normalize_authority(v.to_str().unwrap_or(""));
+                if authority.is_empty() {
+                    return false;
+                }
+                // Bare host: strip the port (rsplit handles "[::1]:8080"; a
+                // bare "::1" has no port and matches via the full-string arm).
+                let bare = authority
+                    .rsplit_once(':')
+                    .filter(|(host, _)| !host.contains(':'))
+                    .map(|(host, _)| host)
+                    .unwrap_or(&authority);
+                allowed.iter().any(|a| authority == *a || bare == *a)
             }
         }
     };
@@ -246,6 +282,16 @@ fn is_local_request(headers: &HeaderMap) -> bool {
         return false;
     }
     true
+}
+
+/// Normalize a Host/Origin header value to `host[:port]`. Browsers send
+/// Origin as a full URL (`http://localhost:8787`), Host as a bare authority;
+/// both must resolve to the same check.
+fn normalize_authority(value: &str) -> String {
+    let v = value.trim().to_ascii_lowercase();
+    let v = v.split("://").nth(1).unwrap_or(&v);
+    let v = v.split('/').next().unwrap_or(v);
+    v.trim_end_matches('.').to_string()
 }
 
 async fn mcp_get() -> Response {

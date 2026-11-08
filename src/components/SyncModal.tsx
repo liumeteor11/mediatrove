@@ -78,8 +78,8 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
     const fetchPeers = async () => {
         try {
             const res = await invoke<PeerInfo[]>('get_peers');
-            // Deduplicate by IP
-            const unique = res.filter((v, i, a) => a.findIndex(t => t.ip === v.ip) === i);
+            // Deduplicate by ip:port (one IP may legitimately host several instances)
+            const unique = res.filter((v, i, a) => a.findIndex(t => t.ip === v.ip && t.port === v.port) === i);
             setPeers(unique);
         } catch (e) {
             console.error(e);
@@ -94,7 +94,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
             await invoke('sync_with_peer', { peerIp: peer.ip, peerPort: peer.port, username });
             setStatus('Sync Completed!');
             setTimeout(() => {
-                window.location.reload(); 
+                window.location.reload();
             }, 1000);
         } catch (e) {
             const msg = String(e);
