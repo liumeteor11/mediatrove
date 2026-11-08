@@ -2314,6 +2314,7 @@ export const callAIStream = async (
 
     let lastError: any = null;
     let temperatureAdjusted = false;
+    const streamStartTs = performance.now();
 
     /** Transient failures worth another try before giving up on the reply. */
     const isTransientStreamError = (e: any): boolean => {
@@ -2322,6 +2323,25 @@ export const callAIStream = async (
         if (status === 429 || (status >= 500 && status < 600)) return true;
         if (e?.name === 'APIConnectionError' || e?.name === 'APIConnectionTimeoutError') return true;
         return /429|rate limit|too many requests|5\d\d|service unavailable|overloaded|timeout|timed out|fetch failed|failed to fetch|connection (error|reset|closed)|network error|econnreset|socket hang up|stream interrupted|error decoding|incomplete message|unexpected eof|broken pipe|aborted/i.test(msg);
+    };
+
+    // callAI logs its successful completions; without this mirror a streamed
+    // reply never reached the I/O log, so half the chat traffic was invisible
+    // when diagnosing provider issues from ai_io.jsonl.
+    const logStreamSuccess = (text: string) => {
+        try {
+            useAIStore.getState().appendLog({
+                id: uuidv4(),
+                ts: Date.now(),
+                channel: 'ai',
+                provider: effProvider,
+                model,
+                baseURL: finalBaseURL,
+                request: { messages, temperature: effTemperature, stream: true },
+                response: { content: text },
+                durationMs: Math.round(performance.now() - streamStartTs),
+            });
+        } catch {}
     };
 
     for (let keyIndex = 0; keyIndex < keyList.length; keyIndex++) {
@@ -2366,6 +2386,7 @@ export const callAIStream = async (
                         on_event: channel
                     });
                     if (!full) throw new Error(streamError || 'empty-ai-response');
+                    logStreamSuccess(full);
                     return full;
                 } else {
                     const client = new OpenAI({
@@ -2388,6 +2409,7 @@ export const callAIStream = async (
                         }
                     }
                     if (!full) throw new Error('empty-ai-response');
+                    logStreamSuccess(full);
                     return full;
                 }
             } catch (e: any) {
