@@ -212,7 +212,12 @@ export const MediaCard: React.FC<MediaCardProps> = ({
               // marked season is finished.
               if (info.season < progressSeason) watched = info.total;
               else if (info.season === progressSeason) watched = Math.min(progressEp, info.total);
-          } else if (info.season === item.seasons![item.seasons!.length - 1].season) {
+          } else if (info.season === item.seasons![0].season) {
+              // Flat progress ("E8") predates multi-season knowledge: markWatched
+              // writes season-prefixed progress once several seasons are known,
+              // so an un-prefixed count belongs to the first season. Attributing
+              // it to the newest season made the watched count jump around every
+              // time an update check discovered a new season.
               watched = Math.min(flatWatched ?? 0, info.total);
           }
           return makeBlock(info.season, info.total, released, watched);

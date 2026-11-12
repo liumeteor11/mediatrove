@@ -180,6 +180,17 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
                 const inc = item[key];
                 return (has(cur) && !has(inc)) ? cur : (inc ?? cur);
             };
+            // Search results never carry an authoritative episode count — TMDb
+            // search mapping has no totalEpisodes/seasons, so any value present
+            // is the AI model's guess, and it differs on every search (whole-
+            // series sum, another season, or null). The stored value, in turn,
+            // was written by the authoritative TMDB update check. Re-adding a
+            // title to refresh its metadata must therefore keep the stored
+            // tracking numbers and only fill gaps, or the episode grid and the
+            // update checks keep judging a number that changes every search.
+            const posNumber = (v: any) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
+            const validSeasons = (v: any) => (Array.isArray(v) && v.length > 0 ? v : undefined);
+            const hasText = (v: any) => typeof v === 'string' && !!v.trim();
             newItem = {
                 ...exists,
                 ...item,
@@ -199,7 +210,19 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
                 userProgress: exists.userProgress,
                 notificationEnabled: exists.notificationEnabled,
                 tmdbId: exists.tmdbId ?? item.tmdbId,
-                tmdbMediaType: exists.tmdbMediaType ?? item.tmdbMediaType
+                tmdbMediaType: exists.tmdbMediaType ?? item.tmdbMediaType,
+                // Verified counts win over fresh guesses; guesses only fill gaps.
+                totalEpisodes: posNumber(exists.totalEpisodes) ?? posNumber(item.totalEpisodes),
+                seasons: validSeasons(exists.seasons) ?? validSeasons(item.seasons),
+                userRating: posNumber(exists.userRating) ?? posNumber(item.userRating),
+                // Update-check state: a re-add is not a check, so keep the
+                // timestamps and the "new content" badge as they are.
+                hasNewUpdate: exists.hasNewUpdate,
+                lastCheckedAt: exists.lastCheckedAt,
+                addedAt: exists.addedAt ?? item.addedAt,
+                // An empty latestUpdateInfo means "no data" (e.g. trending
+                // re-adds), not a newer update — keep what's stored.
+                latestUpdateInfo: hasText(item.latestUpdateInfo) ? item.latestUpdateInfo : exists.latestUpdateInfo
             };
             // Re-adding an existing title means the user is actively engaging with
             // it, so surface it at the top like a fresh add. When it lives inside
