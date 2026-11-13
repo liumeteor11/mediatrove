@@ -3810,6 +3810,10 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
         } catch {}
     }
 
+    // A repaired poster also clears the runtime load-failure flag, so the
+    // item leaves the repair sweeps until its image breaks again.
+    if (updates.posterUrl) updates.posterFailedAt = undefined;
+
     return Object.keys(updates).length > 0 ? updates : null;
 };
 

@@ -42,6 +42,7 @@ export interface MediaItem {
   userProgress?: string; // e.g. "S1E5" or "Chapter 10"
   totalEpisodes?: number; // Episode/chapter count of the current season (or whole work when finished); drives the episode grid
   seasons?: SeasonInfo[]; // Structured per-season counts (S1 N集 / S2 M集) from authoritative checks
+  posterFailedAt?: number; // Last time posterUrl failed to load at runtime; makes repair sweeps re-fetch it
   notificationEnabled?: boolean;
   lastCheckedAt?: number;
   hasNewUpdate?: boolean; // New field for tracking updates

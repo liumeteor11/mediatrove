@@ -107,6 +107,8 @@ pub struct MediaItem {
     pub total_episodes: Option<i32>,
     #[serde(rename = "seasons")]
     pub seasons: Option<Vec<SeasonInfo>>,
+    #[serde(rename = "posterFailedAt")]
+    pub poster_failed_at: Option<u64>,
     #[serde(rename = "notificationEnabled")]
     pub notification_enabled: Option<bool>,
     #[serde(rename = "lastCheckedAt")]

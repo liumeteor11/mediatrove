@@ -153,6 +153,23 @@ export const MediaCard: React.FC<MediaCardProps> = ({
       setImgSrc(FALLBACK_POSTER);
       setImgFailed(true);
       setImgLoading(false);
+      // A poster that fails to load at runtime (expired CDN link, dead host,
+      // new hotlink protection) still looks intact to the repair logic, which
+      // only recognizes placeholders. Record the failure once so the repair
+      // sweeps and the card's refresh button re-fetch it; onLoad clears the
+      // flag again as soon as an image renders.
+      if (item.posterUrl && !item.customPosterUrl && !isPlaceholderPosterUrl(item.posterUrl) && !item.posterFailedAt) {
+          updateItem(item.id, { posterFailedAt: Date.now() });
+      }
+  };
+
+  const handleImageLoad = () => {
+      setImgLoading(false);
+      // The fallback SVG also fires onLoad right after an error switched to it
+      // — only a real poster rendering clears the failure flag.
+      if (imgSrc !== FALLBACK_POSTER && item.posterFailedAt) {
+          updateItem(item.id, { posterFailedAt: undefined });
+      }
   };
 
   const norm = (v?: string) => (v || '').trim();
@@ -265,7 +282,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
       try {
           const now = Date.now();
 
-          const isPosterMissing = isPlaceholderPosterUrl(item.posterUrl);
+          const isPosterMissing = isPlaceholderPosterUrl(item.posterUrl) || !!item.posterFailedAt;
           const isInfoMissing =
               isPosterMissing ||
               isUnknownText(item.releaseDate) ||
@@ -422,7 +439,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                 src={imgSrc}
                 alt={item.title}
                 onError={handleImageError}
-                onLoad={() => setImgLoading(false)}
+                onLoad={handleImageLoad}
                 className={clsx(
                   "w-full h-full object-cover transition-transform duration-700 group-hover:scale-110",
                   imgLoading ? "opacity-0" : "opacity-100",

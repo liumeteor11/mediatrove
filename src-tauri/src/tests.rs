@@ -28,6 +28,7 @@ fn test_media_item_serialization() {
             total: 13,
             released: Some(4),
         }]),
+        poster_failed_at: Some(1700000000000),
         notification_enabled: None,
         last_checked_at: None,
         has_new_update: None,
@@ -49,6 +50,7 @@ fn test_media_item_serialization() {
     // New tracking fields keep their camelCase names in storage.
     assert!(json.contains("\"totalEpisodes\":13"));
     assert!(json.contains("\"seasons\":[{\"season\":2,\"total\":13,\"released\":4}]"));
+    assert!(json.contains("\"posterFailedAt\":1700000000000"));
 
     // Old-version records without the new fields still load (backward
     // compatibility): missing optional fields deserialize as None.
@@ -56,6 +58,7 @@ fn test_media_item_serialization() {
     let old_item: crate::models::MediaItem = serde_json::from_str(old_json).unwrap();
     assert!(old_item.total_episodes.is_none());
     assert!(old_item.seasons.is_none());
+    assert!(old_item.poster_failed_at.is_none());
 }
 
 #[test]
@@ -360,6 +363,7 @@ fn make_db_item(id: &str, title: &str) -> crate::models::MediaItem {
         user_progress: None,
         total_episodes: None,
         seasons: None,
+        poster_failed_at: None,
         notification_enabled: None,
         last_checked_at: None,
         has_new_update: None,

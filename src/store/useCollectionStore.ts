@@ -261,7 +261,7 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
              setTimeout(() => {
                 fetchCover(newItem).then((url) => {
                     if (url) {
-                        get().updateItem(newItem.id, { posterUrl: url });
+                        get().updateItem(newItem.id, { posterUrl: url, posterFailedAt: undefined });
                     }
                 });
              }, 0);

@@ -188,8 +188,9 @@ export const CollectionPage: React.FC = () => {
 
           // 1. Repair missing metadata (posters, dates)
           // Process in chunks to avoid overwhelming APIs
-          const itemsToRepair = collection.filter(item => 
+          const itemsToRepair = collection.filter(item =>
               isPlaceholderPosterUrl(item.posterUrl) ||
+              !!item.posterFailedAt ||
               !item.releaseDate
           );
           
