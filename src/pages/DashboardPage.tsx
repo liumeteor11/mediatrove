@@ -277,6 +277,7 @@ export const DashboardPage: React.FC = () => {
                                isOngoing: u.isOngoing,
                                ...(u.totalEpisodes ? { totalEpisodes: u.totalEpisodes } : {}),
                                ...(u.seasons ? { seasons: u.seasons } : {}),
+                               ...(u.tmdbId ? { tmdbId: u.tmdbId, tmdbMediaType: u.tmdbMediaType } : {}),
                                lastCheckedAt: now,
                                hasNewUpdate: changed ? true : original.hasNewUpdate
                            });

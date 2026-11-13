@@ -556,7 +556,11 @@
     "no_content": "*暂无内容*",
     "markdown_supported": "支持 Markdown",
     "chars": "字符",
-    "markdown_placeholder": "在此输入您的评论 (支持 Markdown)..."
+    "markdown_placeholder": "在此输入您的评论 (支持 Markdown)...",
+    "user_progress": "当前进度",
+    "user_progress_placeholder": "如 S1E5 或 第10章",
+    "total_episodes": "总集数",
+    "total_episodes_placeholder": "如 12"
   },
   "plugin_manager": {
     "title": "插件管理",

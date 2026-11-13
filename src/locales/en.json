@@ -543,7 +543,11 @@
     "no_content": "*No content*",
     "markdown_supported": "Markdown Supported",
     "chars": "chars",
-    "markdown_placeholder": "Type your review here using Markdown..."
+    "markdown_placeholder": "Type your review here using Markdown...",
+    "user_progress": "Watch Progress",
+    "user_progress_placeholder": "e.g. S1E5 or Chapter 10",
+    "total_episodes": "Total Episodes",
+    "total_episodes_placeholder": "e.g. 12"
   },
   "plugin_manager": {
     "title": "Plugin Manager",

@@ -47,6 +47,12 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
   const [editDescription, setEditDescription] = useState(item.description || '');
   const [editReleaseDate, setEditReleaseDate] = useState(item.releaseDate || '');
   const [editCast, setEditCast] = useState(item.cast ? item.cast.join(', ') : '');
+  // Manual corrections are the final word on tracking data: when the first
+  // AI/search guess got the episode count wrong (and no authoritative source
+  // covers the title), this is the user's way to fix it for good.
+  const hasSeasonStructure = !!(item.seasons && item.seasons.length > 0);
+  const [editTotalEpisodes, setEditTotalEpisodes] = useState(item.totalEpisodes != null ? String(item.totalEpisodes) : '');
+  const [editUserProgress, setEditUserProgress] = useState(item.userProgress || '');
   const [isSaving, setIsSaving] = useState(false);
   const [viewMode, setViewMode] = useState<'edit' | 'split' | 'preview'>('edit');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -128,12 +134,19 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
   const handleSave = async (silent = false) => {
     setIsSaving(true);
     try {
+      const totalEpisodesNum = parseInt(editTotalEpisodes, 10);
       const updates: Partial<MediaItem> = {
         userReview: reviewContent,
         directorOrAuthor: editDirector,
         description: editDescription,
         releaseDate: editReleaseDate,
         cast: editCast.split(',').map(c => c.trim()).filter(Boolean),
+        userProgress: editUserProgress.trim() || undefined,
+        // With structured seasons the per-season totals come from the TMDB
+        // check; a flat total would be ignored by the grid anyway.
+        ...(hasSeasonStructure
+            ? {}
+            : { totalEpisodes: Number.isFinite(totalEpisodesNum) && totalEpisodesNum > 0 ? totalEpisodesNum : undefined }),
         lastEditedAt: Date.now(),
       };
 
@@ -288,6 +301,32 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
                             placeholder={t('media_card.cast_placeholder', { defaultValue: 'Enter cast members, separated by commas...' })}
                         />
                     </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium text-theme-subtext">{t('edit_modal.user_progress', { defaultValue: 'Watch Progress' })}</label>
+                        <input
+                            type="text"
+                            value={editUserProgress}
+                            onChange={(e) => setEditUserProgress(e.target.value)}
+                            className="w-full p-3 rounded-xl border bg-theme-surface border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent focus:border-transparent outline-none transition-all"
+                            placeholder={t('edit_modal.user_progress_placeholder', { defaultValue: 'e.g. S1E5 or Chapter 10' })}
+                        />
+                    </div>
+                    {!hasSeasonStructure && (
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-theme-subtext">{t('edit_modal.total_episodes', { defaultValue: 'Total Episodes' })}</label>
+                            <input
+                                type="number"
+                                min={1}
+                                value={editTotalEpisodes}
+                                onChange={(e) => setEditTotalEpisodes(e.target.value)}
+                                className="w-full p-3 rounded-xl border bg-theme-surface border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent focus:border-transparent outline-none transition-all"
+                                placeholder={t('edit_modal.total_episodes_placeholder', { defaultValue: 'e.g. 12' })}
+                            />
+                        </div>
+                    )}
                 </div>
 
                 <div className="space-y-2 flex-1 flex flex-col">

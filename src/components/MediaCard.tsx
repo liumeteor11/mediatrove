@@ -303,6 +303,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                       isOngoing: update.isOngoing,
                       ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
                       ...(update.seasons ? { seasons: update.seasons } : {}),
+                      ...(update.tmdbId ? { tmdbId: update.tmdbId, tmdbMediaType: update.tmdbMediaType } : {}),
                       lastCheckedAt: now,
                       hasNewUpdate: changed ? true : item.hasNewUpdate
                   });

@@ -3354,6 +3354,10 @@ export interface UpdateCheckResult {
   // earlier seasons fully aired, the airing season carries its aired count,
   // unaired future seasons start at 0.
   seasons?: SeasonInfo[];
+  // Present when the check (re-)resolved the TMDB entry, so consumers can
+  // backfill the id and future checks hit the authoritative path directly.
+  tmdbId?: number;
+  tmdbMediaType?: 'movie' | 'tv';
 }
 
 export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResult[]> => {
@@ -3407,54 +3411,95 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           return 1 - editDistance(a, b) / maxLen;
       };
 
+      // Build an authoritative result from TMDB show details: the last aired
+      // episode drives the update info, per-season totals drive the grid.
+      const buildTmdbUpdate = (id: string, tmdbId: number, details: any): UpdateCheckResult | null => {
+          const status = String(details.status || '').toLowerCase();
+          const last = details.last_episode_to_air;
+          const next = details.next_episode_to_air;
+          const seasons: SeasonInfo[] = Array.isArray(details.seasons)
+              ? details.seasons
+                    .filter((s: any) => typeof s.season_number === 'number' && s.season_number > 0 && typeof s.episode_count === 'number' && s.episode_count > 0)
+                    .sort((a: any, b: any) => a.season_number - b.season_number)
+                    .map((s: any) => ({ season: s.season_number as number, total: s.episode_count as number }))
+              : [];
+          if (last && typeof last.season_number === 'number' && typeof last.episode_number === 'number') {
+              // Earlier seasons fully aired; the airing season carries
+              // its aired episode count; unaired future seasons start at 0.
+              const withAirState = seasons.map(s => {
+                  if (s.season < last.season_number) return s;
+                  if (s.season === last.season_number) return { ...s, released: last.episode_number };
+                  return { ...s, released: 0 };
+              });
+              const info = formatEp(last.season_number, last.episode_number);
+              const ongoing = status !== 'ended' && status !== 'canceled' && !!next;
+              const latestMeta = withAirState.find(s => s.season === last.season_number);
+              return {
+                  id,
+                  latestUpdateInfo: info,
+                  isOngoing: ongoing,
+                  totalEpisodes: latestMeta?.total,
+                  seasons: withAirState.length > 0 ? withAirState : undefined,
+                  tmdbId,
+                  tmdbMediaType: 'tv'
+              };
+          }
+          if (seasons.length > 0) {
+              const maxSeason = seasons[seasons.length - 1];
+              const info = formatEp(maxSeason.season, maxSeason.total);
+              const ongoing = status !== 'ended' && status !== 'canceled';
+              return {
+                  id,
+                  latestUpdateInfo: info,
+                  isOngoing: ongoing,
+                  totalEpisodes: maxSeason.total,
+                  seasons,
+                  tmdbId,
+                  tmdbMediaType: 'tv'
+              };
+          }
+          return null;
+      };
+      // Strict show-level match for items without a TMDB id: year ±1 first,
+      // then exact title against the full and the season-stripped base title.
+      // A loose match here would overwrite counts with another show's data.
+      const resolveTmdbTvId = async (it: MediaItem): Promise<number | undefined> => {
+          const { base } = parseSeasonSuffix(it.title);
+          const candidates = await searchTMDB(base, 'tv');
+          if (!candidates || candidates.length === 0) return undefined;
+          const year = (it.releaseDate || '').slice(0, 4);
+          if (year && /^\d{4}$/.test(year)) {
+              const yNum = parseInt(year, 10);
+              const byYear = candidates.find((c: any) => {
+                  const cy = parseInt((c.release_date || c.first_air_date || '').slice(0, 4), 10);
+                  return !isNaN(cy) && Math.abs(cy - yNum) <= 1;
+              });
+              if (byYear && typeof byYear.id === 'number') return byYear.id;
+          }
+          const ln = (c: any) => String(c.title || c.name || '').toLowerCase();
+          const byTitle = candidates.find((c: any) => ln(c) === it.title.toLowerCase())
+              || candidates.find((c: any) => ln(c) === base.toLowerCase());
+          return byTitle && typeof byTitle.id === 'number' ? byTitle.id : undefined;
+      };
+
       const authoritativeUpdates: UpdateCheckResult[] = [];
       const pendingForAI: MediaItem[] = [];
       for (const it of batch) {
-          if (it.type === MediaType.TV_SERIES && it.tmdbId && it.tmdbMediaType === 'tv') {
+          if (it.type === MediaType.TV_SERIES) {
               try {
-                  const details = await getTMDBDetails(it.tmdbId, 'tv', isChinese ? 'zh-CN' : 'en-US');
-                  if (details) {
-                      const status = String(details.status || '').toLowerCase();
-                      const last = details.last_episode_to_air;
-                      const next = details.next_episode_to_air;
-                      const seasons: SeasonInfo[] = Array.isArray(details.seasons)
-                          ? details.seasons
-                                .filter((s: any) => typeof s.season_number === 'number' && s.season_number > 0 && typeof s.episode_count === 'number' && s.episode_count > 0)
-                                .sort((a: any, b: any) => a.season_number - b.season_number)
-                                .map((s: any) => ({ season: s.season_number as number, total: s.episode_count as number }))
-                          : [];
-                      if (last && typeof last.season_number === 'number' && typeof last.episode_number === 'number') {
-                          // Earlier seasons fully aired; the airing season carries
-                          // its aired episode count; unaired future seasons start at 0.
-                          const withAirState = seasons.map(s => {
-                              if (s.season < last.season_number) return s;
-                              if (s.season === last.season_number) return { ...s, released: last.episode_number };
-                              return { ...s, released: 0 };
-                          });
-                          const info = formatEp(last.season_number, last.episode_number);
-                          const ongoing = status !== 'ended' && status !== 'canceled' && !!next;
-                          const latestMeta = withAirState.find(s => s.season === last.season_number);
-                          authoritativeUpdates.push({
-                              id: it.id,
-                              latestUpdateInfo: info,
-                              isOngoing: ongoing,
-                              totalEpisodes: latestMeta?.total,
-                              seasons: withAirState.length > 0 ? withAirState : undefined
-                          });
-                          continue;
-                      }
-                      if (seasons.length > 0) {
-                          const maxSeason = seasons[seasons.length - 1];
-                          const info = formatEp(maxSeason.season, maxSeason.total);
-                          const ongoing = status !== 'ended' && status !== 'canceled';
-                          authoritativeUpdates.push({
-                              id: it.id,
-                              latestUpdateInfo: info,
-                              isOngoing: ongoing,
-                              totalEpisodes: maxSeason.total,
-                              seasons
-                          });
-                          continue;
+                  // Direct hit when the id is known; otherwise resolve it first —
+                  // a first guess that came back wrong (no id, or a wrong episode
+                  // count from the AI) gets replaced by the authoritative TMDB
+                  // counts from this check onward.
+                  const tmdbId = (it.tmdbId && it.tmdbMediaType === 'tv') ? it.tmdbId : await resolveTmdbTvId(it);
+                  if (tmdbId) {
+                      const details = await getTMDBDetails(tmdbId, 'tv', isChinese ? 'zh-CN' : 'en-US');
+                      if (details) {
+                          const result = buildTmdbUpdate(it.id, tmdbId, details);
+                          if (result) {
+                              authoritativeUpdates.push(result);
+                              continue;
+                          }
                       }
                   }
               } catch {}

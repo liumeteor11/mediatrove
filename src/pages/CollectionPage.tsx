@@ -231,6 +231,7 @@ export const CollectionPage: React.FC = () => {
                   isOngoing: update.isOngoing,
                   ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
                   ...(update.seasons ? { seasons: update.seasons } : {}),
+                  ...(update.tmdbId ? { tmdbId: update.tmdbId, tmdbMediaType: update.tmdbMediaType } : {}),
                   lastCheckedAt: now,
                   hasNewUpdate: changed ? true : original.hasNewUpdate
                 });
