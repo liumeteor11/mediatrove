@@ -14,10 +14,51 @@ import { checkUpdates, repairMediaItem, FALLBACK_POSTER, isPlaceholderPosterUrl 
 // Episode-grid helpers. The app's progress convention is "the last number in
 // the string is the episode counter" for flat progress ("E30", "第 680 话"),
 // while season-aware progress uses "S{n}E{m}".
+//
+// Free-text update info routinely carries dates and years ("2025年放送中",
+// "第3期（2025）", "2026-10-03 起每周播出"), and blindly taking the last
+// digit-group rendered those as "已更新至 2025 集". A digit-group therefore
+// only counts as an episode when it is not date-shaped, and a bare 4-digit
+// 1900–2100 number is treated as a year unless an explicit episode marker
+// ("第N集" / "更新至N集") claims it.
+const isEpisodeCandidate = (n: number, before: string, after: string, hasUnit: boolean): boolean => {
+    // Date separators ("-03", "10/03") glue digit-groups into dates just like
+    // 年/月/日 do; a trailing 期/季 marks a cour or season, not an episode.
+    if (/[年月日/-]$/.test(before) || /^[年月日期季/-]/.test(after)) return false;
+    if (!hasUnit && n >= 1900 && n <= 2100) return false;
+    return n > 0;
+};
+
 const lastNumber = (str?: string): number | null => {
     if (!str) return null;
-    const match = str.match(/(\d+)(?!.*\d)/);
-    return match ? parseInt(match[1], 10) : null;
+    let best: number | null = null;
+    // Explicit episode markers win over any bare trailing number. "期"/"季"
+    // are deliberately absent from the unit class — 第3期 is a cour, not an
+    // episode count.
+    const marker = /(?:更新至|已更新至|更新到|已更新到)\s*(?<verb>\d+)|第\s*(?<unit>\d+)\s*[集话話章]|episode\s*(?<ep>\d+)|chapter\s*(?<chap>\d+)|\be(?:p)?\s*\.?\s*(?<e>\d+)\b/gi;
+    for (const m of str.matchAll(marker)) {
+        const raw = m.groups?.verb ?? m.groups?.unit ?? m.groups?.ep ?? m.groups?.chap ?? m.groups?.e;
+        if (!raw) continue;
+        const n = parseInt(raw, 10);
+        if (!Number.isFinite(n)) continue;
+        const rawStart = m.index! + m[0].indexOf(raw);
+        const after = str.slice(rawStart + raw.length, rawStart + raw.length + 1);
+        // "更新至2025年10月" — the verb marker promises an episode, but a date
+        // unit glued to the number means it is part of a date, not a count.
+        if (/^[年月日期季]/.test(after)) continue;
+        best = n;
+    }
+    if (best != null) return best;
+    for (const m of str.matchAll(/\d+/g)) {
+        const n = parseInt(m[0], 10);
+        if (!Number.isFinite(n)) continue;
+        const before = m.index! > 0 ? str.slice(m.index! - 1, m.index!) : '';
+        const after = str.slice(m.index! + m[0].length, m.index! + m[0].length + 1);
+        // Date separators glue digit-groups into dates ("2026-10-03").
+        if (!isEpisodeCandidate(n, before, after, false)) continue;
+        best = n;
+    }
+    return best;
 };
 
 const withLastNumber = (str: string, n: number): string => {

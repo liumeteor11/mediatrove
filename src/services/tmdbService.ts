@@ -25,9 +25,20 @@ const parseCjkNumber = (s: string): number | null => {
 // "Title S2" / "Title（第2季）" → { base, season }. TMDB search does not handle
 // season suffixes (and matches only show-level entries), so callers search the
 // stripped base title and can then fetch season-specific artwork.
+// Anime cour numbering ("第3期") and season info buried in a trailing
+// parenthesized segment ("乱马1/2（2024年重制版动画·第3期）") are stripped too —
+// otherwise those titles never resolve on TMDB and their episode counts stay
+// at the mercy of free-text update info.
 export const parseSeasonSuffix = (title: string): { base: string; season: number | null } => {
     const t = String(title || '').trim();
-    let m = t.match(/^(.+?)\s*[（(]?\s*第([零一二三四五六七八九十\d]+)季\s*[)）]?\s*$/);
+    let m = t.match(/^(.+?)[（(]([^（）()]*第[零一二三四五六七八九十\d]+[期季][^（）()]*)[)）]\s*$/);
+    if (m && m[1]) {
+        const base = m[1].trim();
+        const inner = m[2].match(/第([零一二三四五六七八九十\d]+)[期季]/);
+        const n = inner ? parseCjkNumber(inner[1]) : null;
+        if (base && n && n > 0) return { base, season: n };
+    }
+    m = t.match(/^(.+?)\s*[（(]?\s*第([零一二三四五六七八九十\d]+)[期季]\s*[)）]?\s*$/);
     if (m && m[1]) {
         const n = parseCjkNumber(m[2]);
         if (n && n > 0) return { base: m[1].trim(), season: n };
@@ -126,7 +137,10 @@ export const getTMDBDetails = async (id: number, type: 'movie' | 'tv', language:
     if (!s.enableTmdb || !key) return null
 
     try {
-        const cacheKey = `tmdb_details_v1_${type}_${id}_${language}`;
+        // v2: invalidates details cached before the season-suffix/count fixes —
+        // a record fetched with the old key could keep wrong counts alive for
+        // the full 7-day TTL.
+        const cacheKey = `tmdb_details_v2_${type}_${id}_${language}`;
         const now = Date.now();
         const mem = tmdbDetailsMemCache.get(cacheKey);
         if (mem && (now - mem.ts) < TMDB_DETAILS_CACHE_TTL_MS) return mem.data;

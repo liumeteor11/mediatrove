@@ -3417,9 +3417,12 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           const status = String(details.status || '').toLowerCase();
           const last = details.last_episode_to_air;
           const next = details.next_episode_to_air;
-          const seasons: SeasonInfo[] = Array.isArray(details.seasons)
-              ? details.seasons
-                    .filter((s: any) => typeof s.season_number === 'number' && s.season_number > 0 && typeof s.episode_count === 'number' && s.episode_count > 0)
+              const seasons: SeasonInfo[] = Array.isArray(details.seasons)
+                  ? details.seasons
+                        // season_number is capped: some shows use year-numbered
+                        // seasons ("Season 2025"), which would leak "第2025季"
+                        // into update info and the season grid.
+                        .filter((s: any) => typeof s.season_number === 'number' && s.season_number > 0 && s.season_number <= 1000 && typeof s.episode_count === 'number' && s.episode_count > 0)
                     .sort((a: any, b: any) => a.season_number - b.season_number)
                     .map((s: any) => ({ season: s.season_number as number, total: s.episode_count as number }))
               : [];
@@ -3462,17 +3465,28 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
       };
       // Strict show-level match for items without a TMDB id: year ±1 first,
       // then exact title against the full and the season-stripped base title.
-      // A loose match here would overwrite counts with another show's data.
+      // A loose match here would overwrite counts with another show's data,
+      // so the year window alone is never enough — the candidate title must
+      // also be recognizably the same work.
       const resolveTmdbTvId = async (it: MediaItem): Promise<number | undefined> => {
           const { base } = parseSeasonSuffix(it.title);
           const candidates = await searchTMDB(base, 'tv');
           if (!candidates || candidates.length === 0) return undefined;
+          // TMDB titles often carry a disambiguating year ("Ranma½ (2024)");
+          // strip it before comparing, it is not part of the work's name.
+          const stripYear = (s: string) => String(s || '').replace(/[（(]\s*\d{4}\s*[）)]\s*$/, '');
+          const target = normalize(stripYear(base)) || normalize(it.title);
+          const titleClose = (cand: any) => {
+              const c = normalize(stripYear(String(cand?.title || cand?.name || '')));
+              if (!c || !target) return false;
+              return c.includes(target) || target.includes(c) || similarity(target, c) >= 0.5;
+          };
           const year = (it.releaseDate || '').slice(0, 4);
           if (year && /^\d{4}$/.test(year)) {
               const yNum = parseInt(year, 10);
               const byYear = candidates.find((c: any) => {
                   const cy = parseInt((c.release_date || c.first_air_date || '').slice(0, 4), 10);
-                  return !isNaN(cy) && Math.abs(cy - yNum) <= 1;
+                  return !isNaN(cy) && Math.abs(cy - yNum) <= 1 && titleClose(c);
               });
               if (byYear && typeof byYear.id === 'number') return byYear.id;
           }
