@@ -17,6 +17,8 @@ use tokio::sync::RwLock;
 #[cfg(target_os = "windows")]
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 use scraper::{Html, Selector};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 
 mod models;
 mod database;
@@ -1486,6 +1488,164 @@ async fn ai_chat_stream(
     Err("API Error: exceeded retries".to_string())
 }
 
+// --- DeepSeek tool endpoints (Files API / ASR / TTS) ---
+//
+// These paths are documented against the bare host root (/files,
+// /v1/tools/asr, /v1/tools/tts), so strip any /v1 suffix the configured base
+// URL carries before re-appending the documented paths.
+fn deepseek_tool_root(config: &AIChatConfig) -> String {
+    let raw = config
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+    let mut base = raw
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_end_matches('/')
+        .to_string();
+    if base.is_empty() {
+        base = "https://api.deepseek.com".to_string();
+    }
+    if base.ends_with("/v1") {
+        base.truncate(base.len() - 3);
+    }
+    base
+}
+
+#[command]
+async fn ai_upload_file(
+    file_b64: String,
+    file_name: String,
+    purpose: String,
+    config: AIChatConfig,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let api_key = config.api_key.clone().ok_or("Missing API Key")?;
+    let root = deepseek_tool_root(&config);
+    let bytes = BASE64_STANDARD
+        .decode(file_b64)
+        .map_err(|e| format!("Invalid file data: {}", e))?;
+    // DeepSeek requires the purpose field to precede the file field.
+    let form = reqwest::multipart::Form::new()
+        .text("purpose", purpose)
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes).file_name(file_name),
+        );
+    let local_client = client_with_proxy(config.proxy_url.clone(), config.use_system_proxy);
+    let client = local_client.as_ref().unwrap_or(&state.direct_client);
+    let resp = client
+        .post(format!("{}/files", root))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Upload failed: {}", e))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    if (200..300).contains(&status) {
+        serde_json::from_str::<Value>(&body)
+            .map_err(|e| format!("Unexpected upload response: {}", e))
+    } else {
+        Err(format!(
+            "Upload failed ({}): {}",
+            status,
+            body.chars().take(300).collect::<String>()
+        ))
+    }
+}
+
+#[command]
+async fn ai_asr(
+    audio_b64: String,
+    file_name: String,
+    config: AIChatConfig,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let api_key = config.api_key.clone().ok_or("Missing API Key")?;
+    let root = deepseek_tool_root(&config);
+    let bytes = BASE64_STANDARD
+        .decode(audio_b64)
+        .map_err(|e| format!("Invalid audio data: {}", e))?;
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(bytes).file_name(file_name),
+    );
+    let local_client = client_with_proxy(config.proxy_url.clone(), config.use_system_proxy);
+    let client = local_client.as_ref().unwrap_or(&state.direct_client);
+    let resp = client
+        .post(format!("{}/v1/tools/asr", root))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Speech recognition failed: {}", e))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    if (200..300).contains(&status) {
+        serde_json::from_str::<Value>(&body)
+            .map_err(|e| format!("Unexpected ASR response: {}", e))
+    } else {
+        Err(format!(
+            "Speech recognition failed ({}): {}",
+            status,
+            body.chars().take(300).collect::<String>()
+        ))
+    }
+}
+
+#[command]
+async fn ai_tts(
+    text: String,
+    voice_id: Option<String>,
+    config: AIChatConfig,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let api_key = config.api_key.clone().ok_or("Missing API Key")?;
+    let root = deepseek_tool_root(&config);
+    let body = serde_json::json!({
+        "text": text,
+        "voice_id": voice_id.unwrap_or_else(|| "stella".to_string()),
+        "format": "wav",
+        "filter_markdown": true,
+    });
+    let local_client = client_with_proxy(config.proxy_url.clone(), config.use_system_proxy);
+    let client = local_client.as_ref().unwrap_or(&state.direct_client);
+    let resp = client
+        .post(format!("{}/v1/tools/tts", root))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Speech synthesis failed: {}", e))?;
+    let status = resp.status().as_u16();
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    if !(200..300).contains(&status) {
+        return Err(format!(
+            "Speech synthesis failed ({}): {}",
+            status,
+            String::from_utf8_lossy(&bytes)
+                .chars()
+                .take(300)
+                .collect::<String>()
+        ));
+    }
+    // A non-WAV payload means the API returned a JSON error with a 2xx-ish
+    // envelope or an empty body — surface it instead of playing silence.
+    if bytes.len() < 4 || &bytes[..4] != b"RIFF" {
+        return Err(format!(
+            "Speech synthesis returned no audio: {}",
+            String::from_utf8_lossy(&bytes)
+                .chars()
+                .take(300)
+                .collect::<String>()
+        ));
+    }
+    Ok(BASE64_STANDARD.encode(&bytes))
+}
+
 #[command]
 async fn test_proxy(config: ProxyTestConfig, state: State<'_, AppState>) -> Result<String, String> {
     let url = config
@@ -2037,6 +2197,9 @@ pub fn run() {
             bangumi_details,
             ai_chat,
             ai_chat_stream,
+            ai_upload_file,
+            ai_asr,
+            ai_tts,
             wiki_pageimages,
             douban_cover,
             fetch_og_image,

@@ -231,12 +231,28 @@ pub struct DistilledCharacter {
 
 // --- Roleplay chat sessions ---
 
+/// A file uploaded to the DeepSeek Files API and referenced by id in chat
+/// turns. Only the id and metadata are stored — never the file bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAttachment {
+    #[serde(rename = "fileId")]
+    pub file_id: String,
+    pub name: String,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: String,
     /// "user" | "assistant"
     pub role: String,
     pub content: String,
+    /// Files attached to this message (DeepSeek file ids); absent on plain
+    /// text messages so existing persisted sessions stay byte-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<ChatAttachment>>,
     #[serde(rename = "createdAt")]
     pub created_at: f64,
 }

@@ -62,10 +62,19 @@ export interface DistilledCharacter {
   updatedAt: number;
 }
 
+/** A file uploaded to the DeepSeek Files API and referenced by id in chat turns. */
+export interface ChatAttachment {
+  fileId: string;
+  name: string;
+  size: number;
+  mime?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  attachments?: ChatAttachment[];
   createdAt: number;
 }
 

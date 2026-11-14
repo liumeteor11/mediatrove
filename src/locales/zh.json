@@ -518,7 +518,21 @@
     "input_placeholder": "和 {{name}} 说点什么…（Enter 发送，Shift+Enter 换行）",
     "send": "发送",
     "empty_title": "和 {{name}} 说点什么吧",
-    "empty_desc": "对话将全程保持角色：人设、表达风格与你的纠偏会作用于每一条回复。"
+    "empty_desc": "对话将全程保持角色：人设、表达风格与你的纠偏会作用于每一条回复。",
+    "attach_file": "上传文件",
+    "attach_limit": "最多同时附带 {{count}} 个文件",
+    "file_too_large": "文件过大（上限 50 MB）",
+    "upload_failed": "文件上传失败",
+    "still_uploading": "文件还在上传，请稍候",
+    "voice_input": "语音输入",
+    "stop_recording": "停止录音",
+    "mic_denied": "无法访问麦克风，请检查系统权限",
+    "transcribing": "识别中…",
+    "asr_empty": "没有识别到内容",
+    "asr_failed": "语音识别失败",
+    "read_aloud": "朗读回复",
+    "stop_audio": "停止朗读",
+    "tts_failed": "语音合成失败"
   },
   "media_type": {
     "Movie": "电影",

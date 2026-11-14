@@ -505,7 +505,21 @@
     "input_placeholder": "Message {{name}}... (Enter to send, Shift+Enter for a new line)",
     "send": "Send",
     "empty_title": "Say something to {{name}}",
-    "empty_desc": "The conversation stays in character: persona, expression style and your corrections are applied to every reply."
+    "empty_desc": "The conversation stays in character: persona, expression style and your corrections are applied to every reply.",
+    "attach_file": "Attach file",
+    "attach_limit": "Up to {{count}} files per message",
+    "file_too_large": "File too large (50 MB max)",
+    "upload_failed": "File upload failed",
+    "still_uploading": "Files are still uploading, please wait",
+    "voice_input": "Voice input",
+    "stop_recording": "Stop recording",
+    "mic_denied": "Microphone unavailable. Check system permissions.",
+    "transcribing": "Transcribing…",
+    "asr_empty": "Nothing was recognized",
+    "asr_failed": "Speech recognition failed",
+    "read_aloud": "Read reply aloud",
+    "stop_audio": "Stop playback",
+    "tts_failed": "Speech synthesis failed"
   },
   "media_type": {
     "Movie": "Movie",

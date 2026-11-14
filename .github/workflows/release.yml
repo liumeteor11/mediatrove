@@ -118,6 +118,23 @@ jobs:
             echo "::warning::No app_name string found in the generated Android resources — launcher label was not patched."
           fi
 
+      - name: Grant Android microphone permissions
+        # gen/android is regenerated on every build, so the voice-input
+        # permissions must be re-injected after init. wry's WebView permission
+        # flow requests both RECORD_AUDIO and MODIFY_AUDIO_SETTINGS at runtime
+        # and grants getUserMedia only when EVERY requested permission is
+        # granted — a missing manifest declaration permanently denies it.
+        run: |
+          m=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          if [ -f "$m" ]; then
+            if ! grep -q 'android.permission.RECORD_AUDIO' "$m"; then
+              sed -i 's|<application|<uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <application|' "$m"
+              echo "Microphone permissions injected into AndroidManifest.xml"
+            fi
+          else
+            echo "::warning::AndroidManifest.xml not found — microphone permissions were not injected."
+          fi
+
       - name: Build Android APK
         run: npm run tauri android build -- --apk true
         env:

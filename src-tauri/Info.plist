@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Merged into the packaged macOS/iOS bundle by Tauri (same-directory
+         Info.plist convention, see the bundle config schema). Without this
+         key the OS kills the app on first microphone access, i.e. voice
+         input in the character chat. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>MediaTrove uses the microphone for voice input when chatting with distilled characters.</string>
+  </dict>
+</plist>

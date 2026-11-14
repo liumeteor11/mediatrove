@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { callAI, callAIStream, describeAIError, providerSupportsTools } from './aiService';
 import { getTMDBDetails } from './tmdbService';
+import i18n from '../i18n';
 import { MediaItem } from '../types/types';
 import {
   CharacterCorrection,
@@ -13,6 +14,7 @@ import {
   TimelineEvent,
 } from '../types/character';
 import { useAIStore } from '../store/useAIStore';
+import { isDeepseekProvider } from './deepseekToolsService';
 
 /**
  * Character distillation & roleplay chat.
@@ -599,7 +601,15 @@ export const compactSession = async (
   if (slice.length === 0) return null;
 
   const transcript = slice
-    .map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`)
+    .map(m => {
+      // Attachment names survive summarization so the persona remembers the
+      // user shared a file even after its turn is archived away.
+      const zh = i18n.language?.startsWith('zh');
+      const atts = m.attachments?.length
+        ? ` (${zh ? '附件' : 'Attachments'}: ${m.attachments.map(a => a.name).join(', ')})`
+        : '';
+      return `${m.role === 'user' ? 'User' : character.name}: ${m.content}${atts}`;
+    })
     .join('\n');
   const messages = [
     {
@@ -634,7 +644,33 @@ export const buildChatRequestMessages = (
 ): any[] => {
   const system = buildCharacterSystemPrompt(character, session.summary || undefined);
   const history = trimHistory(session.messages.slice(session.summarizedUpTo));
-  return [{ role: 'system', content: system }, ...history.map(m => ({ role: m.role, content: m.content }))];
+  // DeepSeek dereferences uploaded files by id directly in chat completions;
+  // other providers cannot, so their turns degrade to a text reference and
+  // the request stays valid instead of dying on an unknown content type.
+  const deepseek = isDeepseekProvider();
+  return [{
+    role: 'system',
+    content: system,
+  }, ...history.map(m => {
+    const atts = (m.attachments || []).filter(a => a && a.fileId);
+    if (atts.length === 0) return { role: m.role, content: m.content };
+    if (deepseek) {
+      const zh = i18n.language?.startsWith('zh');
+      // A content array of bare file blocks is fragile at the API level; an
+      // attachment-only message still carries a small text hint.
+      const text = m.content || (zh ? '（见附件）' : '(See attachment)');
+      return {
+        role: m.role,
+        content: [
+          ...atts.map(a => ({ type: 'file', file_id: a.fileId })),
+          { type: 'text', text },
+        ],
+      };
+    }
+    const zh = i18n.language?.startsWith('zh');
+    const note = `${zh ? '附件' : 'Attachments'}: ${atts.map(a => a.name).join(', ')}`;
+    return { role: m.role, content: m.content ? `${m.content}\n(${note})` : `(${note})` };
+  })];
 };
 
 /**

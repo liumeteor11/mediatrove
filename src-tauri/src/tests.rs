@@ -238,6 +238,7 @@ fn test_chat_session_serialization() {
             id: "m-1".to_string(),
             role: "user".to_string(),
             content: "Hello".to_string(),
+            attachments: None,
             created_at: 5.0,
         }],
         created_at: 1.0,
@@ -247,10 +248,21 @@ fn test_chat_session_serialization() {
     let json = serde_json::to_string(&session).unwrap();
     assert!(json.contains("\"characterId\":\"char-1\""));
     assert!(json.contains("\"summarizedUpTo\":4"));
+    // Attachments are absent on plain messages so persisted pre-attachment
+    // sessions round-trip byte-compatibly.
+    assert!(!json.contains("attachments"));
 
     let parsed: ChatSession = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.messages.len(), 1);
+    assert!(parsed.messages[0].attachments.is_none());
     assert_eq!(parsed.summarized_up_to, 4);
+
+    // A message carrying attachments round-trips its file ids.
+    let with_att: ChatMessage = serde_json::from_str(
+        r#"{"id":"m2","role":"user","content":"see file","attachments":[{"fileId":"file-api-x","name":"a.pdf","size":10}],"createdAt":2.0}"#,
+    )
+    .unwrap();
+    assert_eq!(with_att.attachments.as_ref().unwrap()[0].file_id, "file-api-x");
 
     // Minimal payload without optional fields (summary/messages default).
     let minimal: ChatSession = serde_json::from_str(

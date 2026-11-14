@@ -4,16 +4,34 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import {
   ArrowLeft, Plus, MessageCircle, Trash2, Pencil, Send, Loader2,
-  ShieldAlert, BookOpen, Check, X, Sparkles,
+  ShieldAlert, BookOpen, Check, X, Sparkles, Paperclip, Mic, Volume2, Square, FileText,
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useCharacterStore } from '../store/useCharacterStore';
+import { useAIStore } from '../store/useAIStore';
 import { ChatMessage, ChatSession } from '../types/character';
 import { compactSession, sendCharacterMessage } from '../services/characterService';
 import { describeAIError } from '../services/aiService';
+import {
+  ASR_MAX_SECONDS, MAX_CHAT_ATTACHMENTS, MAX_UPLOAD_BYTES,
+  isDeepseekProvider, synthesizeSpeech, transcribeAudio, uploadChatFile,
+} from '../services/deepseekToolsService';
+import { RecordingSession, startRecording } from '../services/audioRecorder';
 import { v4 as uuidv4 } from 'uuid';
 
 const deriveTitle = (text: string): string => text.trim().replace(/\s+/g, ' ').slice(0, 24);
+
+const formatRecordTime = (s: number): string =>
+  `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+interface PendingAttachment {
+  key: string;
+  name: string;
+  size: number;
+  mime?: string;
+  status: 'uploading' | 'ready' | 'error';
+  fileId?: string;
+}
 
 export const CharacterChatPage: React.FC = () => {
   const { characterId } = useParams<{ characterId: string }>();
@@ -42,6 +60,30 @@ export const CharacterChatPage: React.FC = () => {
   const [renameText, setRenameText] = useState('');
   const [showCorrection, setShowCorrection] = useState(false);
   const [correction, setCorrection] = useState({ scene: '', wrong: '', correct: '' });
+
+  // --- DeepSeek attachments / voice ---
+  // Buttons only render for a DeepSeek config: file ids and the ASR/TTS
+  // endpoints are provider-specific and other backends reject them.
+  const aiProvider = useAIStore(s => s.provider);
+  const aiBaseUrl = useAIStore(s => s.baseUrl);
+  const dsReady = useMemo(() => isDeepseekProvider(), [aiProvider, aiBaseUrl]);
+
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const attachmentsRef = useRef<PendingAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [transcribing, setTranscribing] = useState(false);
+  const recordSessionRef = useRef<RecordingSession | null>(null);
+  const recordTimerRef = useRef<number | null>(null);
+
+  const [tts, setTts] = useState<{ msgId: string; status: 'loading' | 'playing' } | null>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsCacheRef = useRef<Map<string, string>>(new Map());
+  // Monotonic request token: a slow synthesis for message A must not clobber
+  // the state of a later click on message B.
+  const ttsReqRef = useRef(0);
 
   const bootstrappedRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -75,18 +117,33 @@ export const CharacterChatPage: React.FC = () => {
   const handleSend = useCallback(async () => {
     if (!character || !activeSession || pending) return;
     const text = input.trim();
-    if (!text) return;
+    const readyAttachments = attachments.filter(a => a.status === 'ready');
+    if (!text && readyAttachments.length === 0) return;
+    if (attachments.some(a => a.status === 'uploading')) {
+      toast.info(t('character_chat.still_uploading'));
+      return;
+    }
 
-    const userMessage: ChatMessage = { id: uuidv4(), role: 'user', content: text, createdAt: Date.now() };
+    const userMessage: ChatMessage = {
+      id: uuidv4(),
+      role: 'user',
+      content: text,
+      createdAt: Date.now(),
+      ...(readyAttachments.length > 0 ? {
+        attachments: readyAttachments.map(a => ({ fileId: a.fileId!, name: a.name, size: a.size, mime: a.mime })),
+      } : {}),
+    };
     let working: ChatSession = {
       ...activeSession,
       messages: [...activeSession.messages, userMessage],
       title:
         activeSession.messages.filter(m => m.role === 'user').length === 0
-          ? deriveTitle(text)
+          ? deriveTitle(text || readyAttachments.map(a => a.name).join(' '))
           : activeSession.title,
     };
     setInput('');
+    attachmentsRef.current = [];
+    setAttachments([]);
     setStreamText('');
     setPending(true);
     updateSession(working);
@@ -117,7 +174,7 @@ export const CharacterChatPage: React.FC = () => {
       setPending(false);
       inputRef.current?.focus();
     }
-  }, [character, activeSession, pending, input, updateSession, t]);
+  }, [character, activeSession, pending, input, attachments, updateSession, t]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -125,6 +182,162 @@ export const CharacterChatPage: React.FC = () => {
       handleSend();
     }
   };
+
+  const removeAttachment = (key: string) => {
+    attachmentsRef.current = attachmentsRef.current.filter(a => a.key !== key);
+    setAttachments(attachmentsRef.current);
+  };
+
+  /** Upload each picked file right away so the chip tracks its own progress. */
+  const handleFilesPicked = async (fileList: FileList | null) => {
+    const files = Array.from(fileList || []);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    for (const file of files) {
+      if (attachmentsRef.current.length >= MAX_CHAT_ATTACHMENTS) {
+        toast.error(t('character_chat.attach_limit', { count: MAX_CHAT_ATTACHMENTS }));
+        break;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        toast.error(t('character_chat.file_too_large'));
+        continue;
+      }
+      const key = uuidv4();
+      attachmentsRef.current = [...attachmentsRef.current, {
+        key, name: file.name, size: file.size, mime: file.type || undefined, status: 'uploading',
+      }];
+      setAttachments(attachmentsRef.current);
+      try {
+        const att = await uploadChatFile(file);
+        attachmentsRef.current = attachmentsRef.current.map(a =>
+          a.key === key ? { ...a, status: 'ready' as const, fileId: att.fileId } : a);
+      } catch (e) {
+        console.error('Attachment upload failed', e);
+        attachmentsRef.current = attachmentsRef.current.map(a =>
+          a.key === key ? { ...a, status: 'error' as const } : a);
+        toast.error(t('character_chat.upload_failed'));
+      }
+      setAttachments(attachmentsRef.current);
+    }
+  };
+
+  /** finish=false transcribes into the input; finish=true discards the take. */
+  const finishRecording = useCallback(async (discard: boolean) => {
+    const session = recordSessionRef.current;
+    if (!session) return;
+    recordSessionRef.current = null;
+    if (recordTimerRef.current) {
+      window.clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    setRecording(false);
+    if (discard) {
+      session.cancel();
+      return;
+    }
+    try {
+      setTranscribing(true);
+      const { blob, seconds } = await session.stop();
+      if (blob.size === 0) throw new Error('empty-recording');
+      const text = await transcribeAudio(blob, seconds);
+      if (!text) {
+        toast.error(t('character_chat.asr_empty'));
+        return;
+      }
+      // The transcript lands in the input box for a final check before send.
+      setInput(prev => (prev.trim() ? `${prev.trim()} ${text}` : text));
+    } catch (e) {
+      console.error('Speech recognition failed', e);
+      toast.error(t('character_chat.asr_failed'));
+    } finally {
+      setTranscribing(false);
+    }
+  }, [t]);
+
+  const toggleRecording = useCallback(async () => {
+    if (transcribing) return;
+    if (recording) {
+      void finishRecording(false);
+      return;
+    }
+    try {
+      const session = await startRecording();
+      recordSessionRef.current = session;
+      setRecordSeconds(0);
+      setRecording(true);
+      recordTimerRef.current = window.setInterval(() => {
+        setRecordSeconds(s => Math.min(s + 1, ASR_MAX_SECONDS));
+      }, 1000);
+    } catch (e) {
+      console.error('Microphone unavailable', e);
+      toast.error(t('character_chat.mic_denied'));
+    }
+  }, [recording, transcribing, finishRecording, t]);
+
+  // ASR rejects audio beyond 120 s — stop the take right before hitting the
+  // cap instead of uploading a recording that can only fail.
+  useEffect(() => {
+    if (recording && recordSeconds >= ASR_MAX_SECONDS) void finishRecording(false);
+  }, [recordSeconds, recording, finishRecording]);
+
+  const stopTts = useCallback(() => {
+    ttsReqRef.current += 1;
+    ttsAudioRef.current?.pause();
+    ttsAudioRef.current = null;
+    setTts(null);
+  }, []);
+
+  const speakMessage = useCallback(async (message: ChatMessage) => {
+    if (!message.content.trim()) return;
+    if (tts?.msgId === message.id) {
+      stopTts();
+      return;
+    }
+    stopTts();
+    const req = ++ttsReqRef.current;
+    setTts({ msgId: message.id, status: 'loading' });
+    try {
+      // Synthesizing costs money per request — cache per message so a second
+      // click replays instead of re-billing.
+      let url = ttsCacheRef.current.get(message.id);
+      if (!url) {
+        url = await synthesizeSpeech(message.content);
+        if (ttsReqRef.current !== req) return;
+        ttsCacheRef.current.set(message.id, url);
+      }
+      const audio = new Audio(url);
+      audio.onended = () => {
+        if (ttsAudioRef.current === audio) {
+          ttsAudioRef.current = null;
+          setTts(null);
+        }
+      };
+      ttsAudioRef.current = audio;
+      await audio.play();
+      if (ttsReqRef.current !== req) {
+        audio.pause();
+        return;
+      }
+      setTts({ msgId: message.id, status: 'playing' });
+    } catch (e) {
+      console.error('Speech synthesis failed', e);
+      if (ttsReqRef.current === req) {
+        ttsAudioRef.current = null;
+        setTts(null);
+        toast.error(t('character_chat.tts_failed'));
+      }
+    }
+  }, [tts, stopTts, t]);
+
+  // Leaving the page or switching sessions must not leave audio playing or
+  // the microphone open.
+  useEffect(() => () => {
+    recordSessionRef.current?.cancel();
+    if (recordTimerRef.current) window.clearInterval(recordTimerRef.current);
+    ttsAudioRef.current?.pause();
+  }, []);
+  useEffect(() => {
+    stopTts();
+  }, [activeSession?.id, stopTts]);
 
   const submitCorrection = () => {
     if (!character || !correction.scene.trim() || !correction.correct.trim()) return;
@@ -279,21 +492,44 @@ export const CharacterChatPage: React.FC = () => {
             )}
             {messages.map(message => (
               <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[85%] sm:max-w-[70%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                    message.role === 'user'
-                      ? 'bg-theme-accent text-theme-bg rounded-br-sm'
-                      : 'bg-theme-bg border border-theme-border text-theme-text rounded-bl-sm'
-                  }`}
-                >
-                  {message.role === 'assistant' ? (
-                    <div className="prose prose-sm max-w-none [&_p]:my-1">
-                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                {message.role === 'assistant' ? (
+                  <div className="group flex items-end gap-1 max-w-[85%] sm:max-w-[70%]">
+                    <div className="min-w-0 px-4 py-2.5 rounded-2xl rounded-bl-sm text-sm leading-relaxed bg-theme-bg border border-theme-border text-theme-text">
+                      <div className="prose prose-sm max-w-none [&_p]:my-1">
+                        <ReactMarkdown>{message.content}</ReactMarkdown>
+                      </div>
                     </div>
-                  ) : (
+                    {dsReady && (
+                      <button
+                        onClick={() => void speakMessage(message)}
+                        className="p-1.5 rounded-theme text-theme-subtext hover:text-theme-text hover:bg-theme-bg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity flex-shrink-0"
+                        title={tts?.msgId === message.id ? t('character_chat.stop_audio') : t('character_chat.read_aloud')}
+                      >
+                        {tts?.msgId === message.id && tts.status === 'loading' ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : tts?.msgId === message.id ? (
+                          <Square className="w-4 h-4 text-theme-accent" />
+                        ) : (
+                          <Volume2 className="w-4 h-4" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="max-w-[85%] sm:max-w-[70%] px-4 py-2.5 rounded-2xl rounded-br-sm text-sm leading-relaxed bg-theme-accent text-theme-bg">
+                    {message.attachments && message.attachments.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mb-1.5">
+                        {message.attachments.map(a => (
+                          <span key={a.fileId} className="flex items-center gap-1 px-2 py-0.5 rounded bg-black/10 text-xs">
+                            <FileText className="w-3 h-3 flex-shrink-0" />
+                            <span className="max-w-[160px] truncate">{a.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <p className="whitespace-pre-wrap">{message.content}</p>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             ))}
             {pending && !streamText && (
@@ -319,7 +555,90 @@ export const CharacterChatPage: React.FC = () => {
           </div>
 
           <div className="p-3 border-t border-theme-border">
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {attachments.map(a => (
+                  <span
+                    key={a.key}
+                    className={`flex items-center gap-1.5 px-2 py-1 rounded-theme text-xs border bg-theme-bg ${
+                      a.status === 'error' ? 'border-red-400/60 text-red-400' : 'border-theme-border text-theme-subtext'
+                    }`}
+                  >
+                    {a.status === 'uploading' ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : a.status === 'error' ? (
+                      <X className="w-3 h-3" />
+                    ) : (
+                      <FileText className="w-3 h-3" />
+                    )}
+                    <span className="max-w-[180px] truncate">{a.name}</span>
+                    <button
+                      onClick={() => removeAttachment(a.key)}
+                      className="hover:text-theme-text"
+                      title={t('common.cancel')}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex items-end gap-2">
+              {dsReady && (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={pending}
+                  className="p-2.5 rounded-theme bg-theme-bg border border-theme-border text-theme-subtext hover:text-theme-text disabled:opacity-40 transition-opacity flex-shrink-0"
+                  title={t('character_chat.attach_file')}
+                >
+                  <Paperclip className="w-5 h-5" />
+                </button>
+              )}
+              {dsReady && (recording || transcribing) ? (
+                <div className="flex items-center gap-1.5 p-1.5 rounded-theme bg-theme-bg border border-theme-border flex-shrink-0 self-end">
+                  {transcribing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-theme-accent" />
+                      <span className="text-xs text-theme-subtext">{t('character_chat.transcribing')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => void finishRecording(false)}
+                        className="p-1 rounded-full bg-red-500/15 text-red-500 hover:bg-red-500/25 animate-pulse"
+                        title={t('character_chat.stop_recording')}
+                      >
+                        <Mic className="w-4 h-4" />
+                      </button>
+                      <span className="text-xs text-theme-subtext tabular-nums">{formatRecordTime(recordSeconds)}</span>
+                      <button
+                        onClick={() => void finishRecording(true)}
+                        className="p-1 text-theme-subtext hover:text-theme-text"
+                        title={t('common.cancel')}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              ) : dsReady ? (
+                <button
+                  onClick={() => void toggleRecording()}
+                  disabled={pending}
+                  className="p-2.5 rounded-theme bg-theme-bg border border-theme-border text-theme-subtext hover:text-theme-text disabled:opacity-40 transition-opacity flex-shrink-0"
+                  title={t('character_chat.voice_input')}
+                >
+                  <Mic className="w-5 h-5" />
+                </button>
+              ) : null}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.doc,.docx,.ppt,.pptx,.xlsx,.xls,.txt,.md,.csv,.json,.epub,.mobi,.log,.yml,.yaml,.xml,.html,.css,.ts,.tsx,.js,.py,.java,.go,.rs,.rb,.php,.sh,.sql,image/*"
+                className="hidden"
+                onChange={(e) => void handleFilesPicked(e.target.files)}
+              />
               <textarea
                 ref={inputRef}
                 value={input}
@@ -331,8 +650,8 @@ export const CharacterChatPage: React.FC = () => {
               />
               <button
                 onClick={handleSend}
-                disabled={pending || !input.trim()}
-                className="p-2.5 rounded-theme bg-theme-accent text-theme-bg hover:bg-theme-accent-hover disabled:opacity-40 transition-opacity"
+                disabled={pending || attachments.some(a => a.status === 'uploading') || (!input.trim() && !attachments.some(a => a.status === 'ready'))}
+                className="p-2.5 rounded-theme bg-theme-accent text-theme-bg hover:bg-theme-accent-hover disabled:opacity-40 transition-opacity flex-shrink-0"
                 title={t('character_chat.send')}
               >
                 {pending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
