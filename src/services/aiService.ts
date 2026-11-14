@@ -3360,6 +3360,65 @@ export interface UpdateCheckResult {
   tmdbMediaType?: 'movie' | 'tv';
 }
 
+// Progress embedded in free-text update info, as (season, episode). Both parts
+// are optional: comics/books track a flat chapter ("第1052章"), TV tracks
+// season+episode ("第5季 第8集", "S5E8"). Dates and years must not read as
+// progress — the digit rules mirror the episode-grid extraction on MediaCard.
+interface UpdateProgress { season: number | null; ep: number | null; }
+
+const parseUpdateProgress = (text?: string): UpdateProgress | null => {
+    const s = String(text || '').trim();
+    if (!s) return null;
+    // Explicit season+episode markers first: they cannot be confused with dates.
+    const se = s.match(/第\s*(\d{1,3})\s*[季期]\s*第?\s*(\d{1,4})\s*[集话話章]/)
+        || s.match(/[Ss](\d{1,3})\s*[-·]?\s*[Ee](\d{1,4})\b/)
+        || s.match(/season\s*(\d{1,3})\s*(?:[/·,，-]|ep\.?|episode)\s*(\d{1,4})/i);
+    if (se) return { season: parseInt(se[1], 10), ep: parseInt(se[2], 10) };
+    // Flat counters: an explicit unit wins ("第1052章", "更新至 680 话").
+    const unit = s.match(/第\s*(\d{1,5})\s*[集话話章]/)
+        || s.match(/(?:更新至|已更新至|更新到|已更新到|chapter|episode)\s*(\d{1,5})/i);
+    if (unit) return { season: null, ep: parseInt(unit[1], 10) };
+    // Last resort: the last bare number that is not date-shaped or year-like.
+    let best: number | null = null;
+    for (const m of s.matchAll(/\d+/g)) {
+        const v = parseInt(m[0], 10);
+        if (!Number.isFinite(v)) continue;
+        const before = m.index! > 0 ? s.slice(m.index! - 1, m.index!) : '';
+        const after = s.slice(m.index! + m[0].length, m.index! + m[0].length + 1);
+        if (/[年月日/-]$/.test(before) || /^[年月日期/-]/.test(after)) continue;
+        if (v >= 1900 && v <= 2100) continue;
+        best = v;
+    }
+    return best != null ? { season: null, ep: best } : null;
+};
+
+// Null season (flat progress) sorts before any real season.
+const compareUpdateProgress = (a: UpdateProgress, b: UpdateProgress): number => {
+    const sa = a.season ?? -1, sb = b.season ?? -1;
+    if (sa !== sb) return sa - sb;
+    return (a.ep ?? 0) - (b.ep ?? 0);
+};
+
+// Guard against update sources regressing a record: an AI answering from stale
+// internal knowledge (or a wrong TMDB match) can return OLDER progress than
+// what is already stored, which flipped correctly-ended shows back to "airing"
+// and back. A same-progress result keeps the stored wording (so the card never
+// flags a phantom "new update" on every check) but still takes an
+// authoritative airing-state correction; a same-progress guess from the AI
+// changes nothing at all.
+const mergeNonRegressing = (item: MediaItem, update: UpdateCheckResult, authoritative: boolean): UpdateCheckResult | null => {
+    const prev = parseUpdateProgress(item.latestUpdateInfo);
+    const next = parseUpdateProgress(update.latestUpdateInfo);
+    if (!prev || !next) return update;
+    const cmp = compareUpdateProgress(prev, next);
+    if (cmp < 0) return update; // stored is behind — genuine advance
+    if (cmp > 0) return null;   // stored is ahead — the source regressed
+    if (authoritative && update.isOngoing !== item.isOngoing) {
+        return { ...update, latestUpdateInfo: item.latestUpdateInfo };
+    }
+    return { ...update, latestUpdateInfo: item.latestUpdateInfo, isOngoing: item.isOngoing };
+};
+
 export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResult[]> => {
   // Singleton guard: update checks are triggered from several surfaces
   // (app mount, collection page, dashboard, media card). Never run them
@@ -3476,10 +3535,19 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           // strip it before comparing, it is not part of the work's name.
           const stripYear = (s: string) => String(s || '').replace(/[（(]\s*\d{4}\s*[）)]\s*$/, '');
           const target = normalize(stripYear(base)) || normalize(it.title);
+          // Localized searches (zh-CN) return translated display names
+          // ("怪奇物语"), so an English-titled item can never match the name
+          // field alone — original_name/original_title carry the source-language
+          // title and must be part of the comparison.
+          const candNames = (cand: any): string[] =>
+              [cand?.title, cand?.name, cand?.original_title, cand?.original_name]
+                  .filter((v: any) => typeof v === 'string' && v.trim())
+                  .map((v: string) => normalize(stripYear(v)))
+                  .filter(Boolean);
           const titleClose = (cand: any) => {
-              const c = normalize(stripYear(String(cand?.title || cand?.name || '')));
-              if (!c || !target) return false;
-              return c.includes(target) || target.includes(c) || similarity(target, c) >= 0.5;
+              if (!target) return false;
+              return candNames(cand).some(c =>
+                  c.includes(target) || target.includes(c) || similarity(target, c) >= 0.5);
           };
           const year = (it.releaseDate || '').slice(0, 4);
           if (year && /^\d{4}$/.test(year)) {
@@ -3490,9 +3558,10 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
               });
               if (byYear && typeof byYear.id === 'number') return byYear.id;
           }
-          const ln = (c: any) => String(c.title || c.name || '').toLowerCase();
-          const byTitle = candidates.find((c: any) => ln(c) === it.title.toLowerCase())
-              || candidates.find((c: any) => ln(c) === base.toLowerCase());
+          const nTitle = normalize(it.title);
+          const nBase = normalize(base);
+          const byTitle = candidates.find((c: any) => candNames(c).includes(nTitle))
+              || candidates.find((c: any) => candNames(c).includes(nBase));
           return byTitle && typeof byTitle.id === 'number' ? byTitle.id : undefined;
       };
 
@@ -3511,7 +3580,13 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                       if (details) {
                           const result = buildTmdbUpdate(it.id, tmdbId, details);
                           if (result) {
-                              authoritativeUpdates.push(result);
+                              // Even the authoritative path is dropped when it
+                              // would move the record backward — that means the
+                              // TMDB match is wrong, not the stored data.
+                              const merged = mergeNonRegressing(it, result, true);
+                              if (merged) {
+                                  authoritativeUpdates.push(merged);
+                              }
                               continue;
                           }
                       }
@@ -3529,6 +3604,11 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
       
       let context = "";
       let queryList = "";
+      // Whether usable engine snippets exist — all-empty results must not
+      // reach the prompt as "No results": tool-capable models read that as
+      // "searching is pointless" and answer from stale memory instead of
+      // calling their own search tool.
+      let includeContext = false;
 
       // Native-search models fetch their own fresh results; only fall back to
       // engine-API snippets when the model cannot search on its own.
@@ -3537,16 +3617,19 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
       if (useEngineContext) {
           // Parallel search for the batch
           const searchPromises = pendingForAI.map(async (item) => {
-              const typeTerm = isChinese ? 
-                  (item.type === MediaType.COMIC ? '漫画 最新话' : item.type === MediaType.BOOK ? '小说 最新章节' : '最新集 更新') : 
+              const typeTerm = isChinese ?
+                  (item.type === MediaType.COMIC ? '漫画 最新话' : item.type === MediaType.BOOK ? '小说 最新章节' : '最新集 更新') :
                   (item.type === MediaType.COMIC ? 'latest chapter' : 'latest episode');
               const q = `"${item.title}" ${typeTerm}`;
               const snippets = await getSearchSnippets(q);
               return { title: item.title, snippets };
           });
-          
+
           const results = await Promise.all(searchPromises);
-          context = results.map(r => `Work: ${r.title}\nSearch Results:\n${r.snippets || "No results"}\n---`).join('\n');
+          includeContext = results.some(r => !!r.snippets && r.snippets.trim().length > 0);
+          if (includeContext) {
+              context = results.map(r => `Work: ${r.title}\nSearch Results:\n${r.snippets || "No results"}\n---`).join('\n');
+          }
           queryList = pendingForAI.map(item => {
               const y = (item.releaseDate || '').slice(0, 4);
               const hasY = !!y && /^\d{4}$/.test(y);
@@ -3566,38 +3649,40 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
       if (isChinese) {
           userPrompt = `今天是 ${today}。请以此日期为基准检查作品的最新更新状态: ${queryList}。
 
-          ${useEngineContext ? `参考搜索结果:\n${context}\n` : ''}
-          
+          ${includeContext ? `参考搜索结果:\n${context}\n` : ''}
+
           请提供截至今天的最新一集/一章信息。
           返回一个包含以下对象的JSON数组:
           - title: 字符串 (完全匹配)
           - latestUpdateInfo: 字符串 (例如 "第4季 第8集" 或 "第1052章")
           - isOngoing: 布尔值 (如果仍在更新则为 true, 完结为 false)
-          
-          [注意] 
+
+          [注意]
           1. 如果有搜索结果，请优先依据搜索结果判断。
           2. 如果搜索结果显示已完结，isOngoing 应为 false。
-          3. 如果没有搜索结果，请利用你的内部知识库。
+          3. 如果你可以调用搜索工具，必须先实际调用工具检索，再依据检索结果回答；只有搜索工具不可用或检索失败时才退回内部知识。
           4. 保持 JSON 格式合法。
           5. 宁可保守，不要编造：无法确认的集数/章节请返回你确信的最近一条信息，不要臆造比已知更新的进度。
+          6. 没有明确证据时不要把已完结作品改判为连载中；已放出大结局或最终季完结的作品 isOngoing 必须为 false。
           `;
       } else {
           userPrompt = `Today is ${today}. Check the latest status as of this date for: ${queryList}.
 
-          ${useEngineContext ? `Reference Search Results:\n${context}\n` : ''}
-          
+          ${includeContext ? `Reference Search Results:\n${context}\n` : ''}
+
           Provide the absolute latest episode/chapter as of today.
           Return a JSON array with objects containing:
           - title: string (exact match)
           - latestUpdateInfo: string (e.g. "Season 4 Episode 8" or "Chapter 1052")
           - isOngoing: boolean (true if still updating, false if ended)
-          
+
           [Note]
           1. Prioritize the provided search results.
           2. If results indicate ended, set isOngoing to false.
-          3. If no search results, use internal knowledge.
+          3. If you have a search tool, you must actually call it and answer from its results; fall back to internal knowledge only when the tool is unavailable or fails.
           4. Return strict JSON.
           5. Be conservative: when you cannot verify the latest number, return the most recent entry you are confident about — never fabricate a newer episode/chapter than you know of.
+          6. Never relabel an ended work as ongoing without solid evidence; a work whose series finale has aired must have isOngoing: false.
           `;
       }
 
@@ -3653,11 +3738,13 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                           }
                       }
                       if (id) {
-                          allUpdates.push({
-                              id,
-                              latestUpdateInfo: updateText,
-                              isOngoing: u.isOngoing === true
-                          });
+                          const batchItem = batch.find(b => b.id === id);
+                          const merged = batchItem
+                              ? mergeNonRegressing(batchItem, { id, latestUpdateInfo: updateText, isOngoing: u.isOngoing === true }, false)
+                              : { id, latestUpdateInfo: updateText, isOngoing: u.isOngoing === true };
+                          if (merged) {
+                              allUpdates.push(merged);
+                          }
                       }
                   }
               }
@@ -3689,7 +3776,12 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
     const isFullDate = (v?: string) => /^\d{4}-\d{2}-\d{2}$/.test(norm(v));
     const wantsFullDate = item.type === MediaType.MOVIE || item.type === MediaType.TV_SERIES;
 
-    const isPosterMissing = isBlockedPosterUrl(item.posterUrl);
+    // A runtime-dead poster (posterFailedAt) is as good as missing: the repair
+    // callers (card refresh button, collection sweep) gate on that flag, so this
+    // chain must actually re-fetch it — not bail out because the URL still
+    // "looks" intact. Custom covers are user-owned and never repaired.
+    const isPosterMissing = isBlockedPosterUrl(item.posterUrl)
+        || (!item.customPosterUrl && !!item.posterFailedAt);
     const isDateMissing = wantsFullDate ? !isFullDate(item.releaseDate) : isUnknownText(item.releaseDate);
     const isDirectorMissing = isUnknownText(item.directorOrAuthor);
     const currentDesc = norm(item.description);
@@ -3700,14 +3792,6 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
     if (!isPosterMissing && !isDateMissing && !isDirectorMissing && !isDescMissing && !isCastMissing) return null;
 
     let updates: Partial<MediaItem> = {};
-
-    if (isPosterMissing) {
-        const year = !isUnknownText(item.releaseDate) ? item.releaseDate.split('-')[0] : '';
-        const { picked } = await fetchPosterFromSearch(item.title, year, item.type);
-        if (picked && !isPlaceholderPosterUrl(picked)) {
-            updates.posterUrl = picked;
-        }
-    }
 
     if (item.type === MediaType.MOVIE || item.type === MediaType.TV_SERIES) {
         try {
@@ -3783,10 +3867,22 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
                     }
 
                     const poster = getTMDBPosterUrl(details.poster_path) || undefined;
-                    if (poster && isPosterMissing && !updates.posterUrl) updates.posterUrl = poster;
+                    if (poster && isPosterMissing) updates.posterUrl = poster;
                 }
             }
         } catch {}
+    }
+
+    // Engine image search is the fallback, not the primary: it is how
+    // hotlink-protected scrapes (e.g. doubanio) got saved in the first place,
+    // while a TMDB hit is a stable CDN URL. Only pay for a search when TMDB
+    // could not supply a poster.
+    if (isPosterMissing && !updates.posterUrl) {
+        const year = !isUnknownText(item.releaseDate) ? item.releaseDate.split('-')[0] : '';
+        const { picked } = await fetchPosterFromSearch(item.title, year, item.type);
+        if (picked && !isPlaceholderPosterUrl(picked)) {
+            updates.posterUrl = picked;
+        }
     }
 
     const effective = { ...item, ...updates } as MediaItem;
