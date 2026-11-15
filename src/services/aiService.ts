@@ -10,6 +10,8 @@ import { useCollectionStore } from "../store/useCollectionStore";
 import i18n from '../i18n';
 import type { AIProvider, TrendingMode } from '../store/useAIStore';
 import { buildRequestExtras, getModelCapabilities, getNativeSearchTools, ReasoningLevel } from './modelCatalog';
+import { buildUpdatePatch, UpdateCandidate, SafeUpdate } from './updateGuard';
+import { getWikiContext } from './wikiService';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from 'react-toastify';
 
@@ -3343,81 +3345,18 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
 
 let updatesCheckInFlight = false;
 
-export interface UpdateCheckResult {
-  id: string;
-  latestUpdateInfo: string;
-  isOngoing: boolean;
-  // Episode/chapter count of the current season (or whole finished work) when
-  // an authoritative source knows it; drives the episode-grid UI.
-  totalEpisodes?: number;
-  // Structured per-season counts when the source knows them (TMDB seasons):
-  // earlier seasons fully aired, the airing season carries its aired count,
-  // unaired future seasons start at 0.
-  seasons?: SeasonInfo[];
-  // Present when the check (re-)resolved the TMDB entry, so consumers can
-  // backfill the id and future checks hit the authoritative path directly.
-  tmdbId?: number;
-  tmdbMediaType?: 'movie' | 'tv';
+// Results flowing out of checkUpdates are already vetted by the confidence
+// guard (src/services/updateGuard.ts): regressed progress is dropped entirely,
+// episode counts only change when the source is trustworthy, and unverifiable
+// AI entries never reach the caller. The two extra flags are input-side:
+export interface UpdateCheckResult extends SafeUpdate {
+  // True when the authoritative source only knows the aired-so-far count of
+  // the in-progress season (the real season total is still unknown).
+  totalEpisodesPartial?: boolean;
+  // True when the AI actually confirmed the entry via its search tool or the
+  // supplied engine/Wikipedia excerpts; unverified entries are never applied.
+  verified?: boolean;
 }
-
-// Progress embedded in free-text update info, as (season, episode). Both parts
-// are optional: comics/books track a flat chapter ("第1052章"), TV tracks
-// season+episode ("第5季 第8集", "S5E8"). Dates and years must not read as
-// progress — the digit rules mirror the episode-grid extraction on MediaCard.
-interface UpdateProgress { season: number | null; ep: number | null; }
-
-const parseUpdateProgress = (text?: string): UpdateProgress | null => {
-    const s = String(text || '').trim();
-    if (!s) return null;
-    // Explicit season+episode markers first: they cannot be confused with dates.
-    const se = s.match(/第\s*(\d{1,3})\s*[季期]\s*第?\s*(\d{1,4})\s*[集话話章]/)
-        || s.match(/[Ss](\d{1,3})\s*[-·]?\s*[Ee](\d{1,4})\b/)
-        || s.match(/season\s*(\d{1,3})\s*(?:[/·,，-]|ep\.?|episode)\s*(\d{1,4})/i);
-    if (se) return { season: parseInt(se[1], 10), ep: parseInt(se[2], 10) };
-    // Flat counters: an explicit unit wins ("第1052章", "更新至 680 话").
-    const unit = s.match(/第\s*(\d{1,5})\s*[集话話章]/)
-        || s.match(/(?:更新至|已更新至|更新到|已更新到|chapter|episode)\s*(\d{1,5})/i);
-    if (unit) return { season: null, ep: parseInt(unit[1], 10) };
-    // Last resort: the last bare number that is not date-shaped or year-like.
-    let best: number | null = null;
-    for (const m of s.matchAll(/\d+/g)) {
-        const v = parseInt(m[0], 10);
-        if (!Number.isFinite(v)) continue;
-        const before = m.index! > 0 ? s.slice(m.index! - 1, m.index!) : '';
-        const after = s.slice(m.index! + m[0].length, m.index! + m[0].length + 1);
-        if (/[年月日/-]$/.test(before) || /^[年月日期/-]/.test(after)) continue;
-        if (v >= 1900 && v <= 2100) continue;
-        best = v;
-    }
-    return best != null ? { season: null, ep: best } : null;
-};
-
-// Null season (flat progress) sorts before any real season.
-const compareUpdateProgress = (a: UpdateProgress, b: UpdateProgress): number => {
-    const sa = a.season ?? -1, sb = b.season ?? -1;
-    if (sa !== sb) return sa - sb;
-    return (a.ep ?? 0) - (b.ep ?? 0);
-};
-
-// Guard against update sources regressing a record: an AI answering from stale
-// internal knowledge (or a wrong TMDB match) can return OLDER progress than
-// what is already stored, which flipped correctly-ended shows back to "airing"
-// and back. A same-progress result keeps the stored wording (so the card never
-// flags a phantom "new update" on every check) but still takes an
-// authoritative airing-state correction; a same-progress guess from the AI
-// changes nothing at all.
-const mergeNonRegressing = (item: MediaItem, update: UpdateCheckResult, authoritative: boolean): UpdateCheckResult | null => {
-    const prev = parseUpdateProgress(item.latestUpdateInfo);
-    const next = parseUpdateProgress(update.latestUpdateInfo);
-    if (!prev || !next) return update;
-    const cmp = compareUpdateProgress(prev, next);
-    if (cmp < 0) return update; // stored is behind — genuine advance
-    if (cmp > 0) return null;   // stored is ahead — the source regressed
-    if (authoritative && update.isOngoing !== item.isOngoing) {
-        return { ...update, latestUpdateInfo: item.latestUpdateInfo };
-    }
-    return { ...update, latestUpdateInfo: item.latestUpdateInfo, isOngoing: item.isOngoing };
-};
 
 export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResult[]> => {
   // Singleton guard: update checks are triggered from several surfaces
@@ -3501,6 +3440,10 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                   latestUpdateInfo: info,
                   isOngoing: ongoing,
                   totalEpisodes: latestMeta?.total,
+                  // When the airing season's TMDB episode_count only covers the
+                  // episodes aired so far, the real season total is unknown —
+                  // the confidence guard must not shrink stored counts with it.
+                  totalEpisodesPartial: ongoing && latestMeta?.total != null && latestMeta.total <= last.episode_number,
                   seasons: withAirState.length > 0 ? withAirState : undefined,
                   tmdbId,
                   tmdbMediaType: 'tv'
@@ -3515,6 +3458,8 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                   latestUpdateInfo: info,
                   isOngoing: ongoing,
                   totalEpisodes: maxSeason.total,
+                  // No per-episode air data: a running show's count is at best partial.
+                  totalEpisodesPartial: ongoing,
                   seasons,
                   tmdbId,
                   tmdbMediaType: 'tv'
@@ -3560,8 +3505,20 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           }
           const nTitle = normalize(it.title);
           const nBase = normalize(base);
-          const byTitle = candidates.find((c: any) => candNames(c).includes(nTitle))
-              || candidates.find((c: any) => candNames(c).includes(nBase));
+          // Exact-title fallback must not let a franchise's older entry win:
+          // "乱马1/2" matches the 1989 series and the 2024 remake alike, and
+          // the wrong show's counts would corrupt the record. When the item
+          // has a year, the candidate's first-air year has to be close to it
+          // (±2 tolerates a later season's date on the item); without a year
+          // the title match alone is accepted.
+          const itemYear = year && /^\d{4}$/.test(year) ? parseInt(year, 10) : null;
+          const yearOk = (cand: any) => {
+              if (itemYear == null) return true;
+              const cy = parseInt((cand.release_date || cand.first_air_date || '').slice(0, 4), 10);
+              return !isNaN(cy) && Math.abs(cy - itemYear) <= 2;
+          };
+          const byTitle = candidates.find((c: any) => yearOk(c) && candNames(c).includes(nTitle))
+              || candidates.find((c: any) => yearOk(c) && candNames(c).includes(nBase));
           return byTitle && typeof byTitle.id === 'number' ? byTitle.id : undefined;
       };
 
@@ -3580,10 +3537,11 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                       if (details) {
                           const result = buildTmdbUpdate(it.id, tmdbId, details);
                           if (result) {
-                              // Even the authoritative path is dropped when it
-                              // would move the record backward — that means the
-                              // TMDB match is wrong, not the stored data.
-                              const merged = mergeNonRegressing(it, result, true);
+                              // The confidence guard vets even the authoritative
+                              // path: regressed progress or a partial airing-season
+                              // count means the TMDB match is wrong, not the
+                              // stored data, and the update is dropped.
+                              const merged = buildUpdatePatch(it, result, true);
                               if (merged) {
                                   authoritativeUpdates.push(merged);
                               }
@@ -3644,18 +3602,54 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           }).join(', ');
       }
 
+      // Stored state for the old-vs-new comparison the AI must perform, and
+      // Wikipedia excerpts as an extra citable source (series article leads
+      // usually state the episode/chapter totals). Best-effort: a blocked or
+      // offline Wikipedia simply contributes no context.
+      const storedList = pendingForAI.map(item => {
+          const stored = (item.latestUpdateInfo || '').trim();
+          return isChinese
+              ? `- "${item.title}": ${stored ? `已存进度 "${stored}"` : '暂无进度记录'}, 状态: ${item.isOngoing ? '连载中' : '已完结'}`
+              : `- "${item.title}": ${stored ? `stored progress "${stored}"` : 'no stored progress'}, status: ${item.isOngoing ? 'ongoing' : 'ended'}`;
+      }).join('\n');
+
+      try {
+          const wikiTexts = await Promise.all(pendingForAI.map(item => getWikiContext(item.title, isChinese ? 'zh' : 'en')));
+          const wikiContext = pendingForAI
+              .map((item, i) => wikiTexts[i] ? `Wikipedia (${item.title}):\n${wikiTexts[i]}\n---` : '')
+              .join('')
+              .trim();
+          if (wikiContext) {
+              context = context ? `${context}\n${wikiContext}` : wikiContext;
+              includeContext = true;
+          }
+      } catch {}
+
+      // No verification channel at all (no engine snippets, no Wikipedia
+      // content, model cannot search): any answer would be unverified memory,
+      // and unverifiable results are never applied — skip the call entirely.
+      if (!includeContext && !canUseNativeSearch()) {
+          console.info("checkUpdates: no verifiable source for this batch (no engine snippets, no Wikipedia, no native search) — skipping AI call");
+          continue;
+      }
+
       let userPrompt = "";
       const today = new Date().toISOString().split('T')[0];
       if (isChinese) {
           userPrompt = `今天是 ${today}。请以此日期为基准检查作品的最新更新状态: ${queryList}。
 
-          ${includeContext ? `参考搜索结果:\n${context}\n` : ''}
+          当前已存储的追踪状态（必须先与新检索结果对比）:
+          ${storedList}
+
+          ${includeContext ? `参考检索结果（含 Wikipedia 摘要）:\n${context}\n` : ''}
 
           请提供截至今天的最新一集/一章信息。
           返回一个包含以下对象的JSON数组:
           - title: 字符串 (完全匹配)
           - latestUpdateInfo: 字符串 (例如 "第4季 第8集" 或 "第1052章")
           - isOngoing: 布尔值 (如果仍在更新则为 true, 完结为 false)
+          - verified: 布尔值 (仅当该条信息确实通过搜索工具或上述检索结果核实后才为 true；未经核实必须为 false)
+          - totalEpisodes: 数字 (可选；仅当检索结果明确给出该作品当前季或全篇的总集数/总章数时才返回，严禁估算)
 
           [注意]
           1. 如果有搜索结果，请优先依据搜索结果判断。
@@ -3664,17 +3658,25 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           4. 保持 JSON 格式合法。
           5. 宁可保守，不要编造：无法确认的集数/章节请返回你确信的最近一条信息，不要臆造比已知更新的进度。
           6. 没有明确证据时不要把已完结作品改判为连载中；已放出大结局或最终季完结的作品 isOngoing 必须为 false。
+          7. 将检索结果与已存进度逐条对比：只有检索确认存在更新的集数/章节时才返回新进度；无法确认时 latestUpdateInfo 必须原样返回已存进度，且 verified 为 false。
+          8. 严禁返回比已存进度更旧的集数/章节；更旧的条目会被直接丢弃。
+          9. verified 为 false 的条目不会被采纳，因此无法核实时宁可原样返回已存进度。
           `;
       } else {
           userPrompt = `Today is ${today}. Check the latest status as of this date for: ${queryList}.
 
-          ${includeContext ? `Reference Search Results:\n${context}\n` : ''}
+          Currently stored tracking state (compare your findings against it first):
+          ${storedList}
+
+          ${includeContext ? `Reference sources (incl. Wikipedia excerpts):\n${context}\n` : ''}
 
           Provide the absolute latest episode/chapter as of today.
           Return a JSON array with objects containing:
           - title: string (exact match)
           - latestUpdateInfo: string (e.g. "Season 4 Episode 8" or "Chapter 1052")
           - isOngoing: boolean (true if still updating, false if ended)
+          - verified: boolean (true ONLY if you actually confirmed this entry via your search tool or the reference sources above; otherwise false)
+          - totalEpisodes: number (optional; only when the sources explicitly state the season/series total — never estimate it)
 
           [Note]
           1. Prioritize the provided search results.
@@ -3683,6 +3685,9 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           4. Return strict JSON.
           5. Be conservative: when you cannot verify the latest number, return the most recent entry you are confident about — never fabricate a newer episode/chapter than you know of.
           6. Never relabel an ended work as ongoing without solid evidence; a work whose series finale has aired must have isOngoing: false.
+          7. Compare the sources with the stored progress item by item: only return newer progress when the sources confirm it; when unsure, return the stored progress verbatim with verified=false.
+          8. Never return progress older than what is stored; older entries are discarded outright.
+          9. Entries with verified=false are never applied, so when in doubt echo the stored progress.
           `;
       }
 
@@ -3720,10 +3725,13 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                           console.warn("Failed to parse AI update-check JSON", parseErr);
                       }
                   }
-                  // Schema guard: only accept entries that resolve to a batch item
-                  // and carry a usable update string.
+                  // Schema guard: only accept entries that resolve to a batch
+                  // item, carry a usable update string, and were actually
+                  // verified — an AI answer it could not check against search
+                  // results or the supplied excerpts must never be applied.
                   for (const u of parsed) {
                       if (!u || typeof u !== 'object') continue;
+                      if (u.verified !== true) continue;
                       const updateText = typeof u.latestUpdateInfo === 'string' ? u.latestUpdateInfo.trim() : '';
                       if (!updateText) continue;
                       let id = titleToId.get(String(u.title || '').toLowerCase());
@@ -3739,9 +3747,17 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                       }
                       if (id) {
                           const batchItem = batch.find(b => b.id === id);
-                          const merged = batchItem
-                              ? mergeNonRegressing(batchItem, { id, latestUpdateInfo: updateText, isOngoing: u.isOngoing === true }, false)
-                              : { id, latestUpdateInfo: updateText, isOngoing: u.isOngoing === true };
+                          if (!batchItem) continue;
+                          const candidate: UpdateCandidate = {
+                              id,
+                              latestUpdateInfo: updateText,
+                              isOngoing: u.isOngoing === true,
+                              verified: true,
+                              ...(typeof u.totalEpisodes === 'number' && Number.isFinite(u.totalEpisodes) && u.totalEpisodes > 0
+                                  ? { totalEpisodes: u.totalEpisodes }
+                                  : {})
+                          };
+                          const merged = buildUpdatePatch(batchItem, candidate, false);
                           if (merged) {
                               allUpdates.push(merged);
                           }

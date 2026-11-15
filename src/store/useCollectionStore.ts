@@ -4,6 +4,7 @@ import { fetchCover } from '../services/coverService';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore } from './useAuthStore';
 import { v4 as uuidv4 } from 'uuid';
+import { parseUpdateProgress, compareUpdateProgress } from '../services/updateGuard';
 
 const isTauri = typeof window !== 'undefined' && (('__TAURI__' in window) || ('__TAURI_INTERNALS__' in window));
 
@@ -188,9 +189,24 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
             // title to refresh its metadata must therefore keep the stored
             // tracking numbers and only fill gaps, or the episode grid and the
             // update checks keep judging a number that changes every search.
-            const posNumber = (v: any) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
-            const validSeasons = (v: any) => (Array.isArray(v) && v.length > 0 ? v : undefined);
+            // Year-like values are the historical "year written as a count"
+            // corruption — a search result carrying one must never fill a gap.
+            const posNumber = (v: any) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && !(v >= 1900 && v <= 2100) ? v : undefined);
+            const validSeasons = (v: any) => (Array.isArray(v) && v.length > 0 && v.every((s: any) =>
+                s && typeof s.season === 'number' && s.season > 0 && s.season <= 1000 &&
+                typeof s.total === 'number' && s.total > 0 && !(s.total >= 1900 && s.total <= 2100)) ? v : undefined);
             const hasText = (v: any) => typeof v === 'string' && !!v.trim();
+            // Progress-aware acceptance: the incoming text is the AI's guess.
+            // Only a strictly newer parsable progress may replace the stored one
+            // (and it then carries its airing state); an equal, older or
+            // unparsable guess changes nothing. A re-add is not an update check,
+            // so it can never regress tracking data or flip airing state.
+            const prevInfo = (exists.latestUpdateInfo || '').trim();
+            const incInfo = hasText(item.latestUpdateInfo) ? String(item.latestUpdateInfo).trim() : '';
+            const prevParsed = parseUpdateProgress(prevInfo);
+            const incParsed = parseUpdateProgress(incInfo);
+            const incomingIsAdvance = !!incParsed &&
+                (!prevInfo || (prevParsed != null && compareUpdateProgress(prevParsed, incParsed) < 0));
             newItem = {
                 ...exists,
                 ...item,
@@ -220,9 +236,13 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
                 hasNewUpdate: exists.hasNewUpdate,
                 lastCheckedAt: exists.lastCheckedAt,
                 addedAt: exists.addedAt ?? item.addedAt,
-                // An empty latestUpdateInfo means "no data" (e.g. trending
-                // re-adds), not a newer update — keep what's stored.
-                latestUpdateInfo: hasText(item.latestUpdateInfo) ? item.latestUpdateInfo : exists.latestUpdateInfo
+                // An empty or older latestUpdateInfo means "no new data", not a
+                // newer update — keep what's stored. The airing state only
+                // moves with a genuinely newer progress, never with a guess.
+                latestUpdateInfo: incomingIsAdvance ? incInfo : exists.latestUpdateInfo,
+                isOngoing: incomingIsAdvance ? (item.isOngoing ?? exists.isOngoing) : exists.isOngoing,
+                // Search results hardcode 'To Watch'; the stored backend status wins.
+                status: exists.status ?? item.status
             };
             // Re-adding an existing title means the user is actively engaging with
             // it, so surface it at the top like a fresh add. When it lives inside
