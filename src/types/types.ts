@@ -37,6 +37,7 @@ export interface MediaItem {
 
   tmdbId?: number;
   tmdbMediaType?: 'movie' | 'tv';
+  contentLang?: 'zh' | 'en'; // Language the metadata was fetched in (stamped by searchMedia); update checks keep it
 
   // Tracking fields
   userProgress?: string; // e.g. "S1E5" or "Chapter 10"

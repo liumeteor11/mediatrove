@@ -1,6 +1,6 @@
 import { MediaItem, MediaType } from '../types/types';
 import { fetchPosterFromSearch } from './aiService';
-import { searchTMDB, getTMDBPosterUrl } from './tmdbService';
+import { searchTMDB, getTMDBPosterUrl, tmdbLanguageForItem } from './tmdbService';
 import { useAIStore } from '../store/useAIStore';
 
 const RETRY_COUNT = 3;
@@ -65,7 +65,7 @@ const fetchMovieCover = async (item: MediaItem): Promise<string | undefined> => 
         const tmdbType: 'movie' | 'tv' =
             item.type === MediaType.TV_SERIES || item.type === MediaType.SHORT_DRAMA ? 'tv' : 'movie';
         const year = (item.releaseDate || '').trim().slice(0, 4);
-        const candidates = await searchTMDB(item.title, tmdbType);
+        const candidates = await searchTMDB(item.title, tmdbType, tmdbLanguageForItem(item));
         const best = (year && /^\d{4}$/.test(year))
             ? candidates.find(c => (c.release_date || c.first_air_date || '').startsWith(year))
             : candidates[0];

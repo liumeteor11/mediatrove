@@ -2,13 +2,31 @@
 import { useAIStore } from "../store/useAIStore";
 import i18n from '../i18n';
 import { v4 as uuidv4 } from 'uuid';
+import { MediaItem } from '../types/types';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
 // TMDB's `language` param only localizes the returned fields (titles,
-// overviews, posters) — matching is unaffected. Deriving it from the UI
-// language keeps fetched details and artwork consistent with the UI.
+// overviews, posters) — matching is unaffected. Search results follow the
+// language of the query (a Han-character query gets Chinese artwork/overviews,
+// a Latin query gets English ones) so an English search under a Chinese UI
+// stays English; without a query (trending, item refreshes) the UI language
+// — or the language the item was originally found in — wins.
 export const tmdbLanguageFromUI = (): string => (i18n.language?.startsWith('zh') ? 'zh-CN' : 'en-US');
+
+// The app ships exactly two metadata languages; the Han-range regex is the
+// existing convention (translateTitleToEnglish / poster scoring use it).
+export const detectQueryLang = (q: string): 'zh' | 'en' => (/[\u4e00-\u9fff]/.test(String(q || '')) ? 'zh' : 'en');
+
+export const tmdbLanguageFromQuery = (q: string): string => (detectQueryLang(q) === 'zh' ? 'zh-CN' : 'en-US');
+
+// Items remember the language they were found in (contentLang, stamped by
+// searchMedia) so update checks and repairs don't silently re-localize them
+// to the current UI language.
+export const tmdbLanguageForItem = (item: Pick<MediaItem, 'contentLang'>): string =>
+    item?.contentLang === 'zh' ? 'zh-CN'
+    : item?.contentLang === 'en' ? 'en-US'
+    : tmdbLanguageFromUI();
 
 const CJK_DIGITS: Record<string, number> = { '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
 const parseCjkNumber = (s: string): number | null => {

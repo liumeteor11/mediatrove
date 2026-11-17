@@ -41,12 +41,15 @@ fn test_media_item_serialization() {
         parent_collection_id: None,
         is_collection: None,
         is_pinned: Some(true),
+        content_lang: Some("en".to_string()),
     };
 
     let json = serde_json::to_string(&item).unwrap();
     assert!(json.contains("\"title\":\"Test Movie\""));
     assert!(json.contains("\"type\":\"Movie\""));
     assert!(json.contains("\"isPinned\":true"));
+    // The metadata-language stamp keeps its camelCase name in storage.
+    assert!(json.contains("\"contentLang\":\"en\""));
     // New tracking fields keep their camelCase names in storage.
     assert!(json.contains("\"totalEpisodes\":13"));
     assert!(json.contains("\"seasons\":[{\"season\":2,\"total\":13,\"released\":4}]"));
@@ -59,6 +62,7 @@ fn test_media_item_serialization() {
     assert!(old_item.total_episodes.is_none());
     assert!(old_item.seasons.is_none());
     assert!(old_item.poster_failed_at.is_none());
+    assert!(old_item.content_lang.is_none());
 }
 
 #[test]
@@ -388,6 +392,7 @@ fn make_db_item(id: &str, title: &str) -> crate::models::MediaItem {
         parent_collection_id: None,
         is_collection: None,
         is_pinned: None,
+        content_lang: None,
     }
 }
 

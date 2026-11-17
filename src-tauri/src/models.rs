@@ -132,6 +132,10 @@ pub struct MediaItem {
     pub is_collection: Option<bool>,
     #[serde(rename = "isPinned")]
     pub is_pinned: Option<bool>,
+    /// Language the metadata was fetched in ("zh" / "en"), stamped by the
+    /// search that produced the item so update checks keep that language.
+    #[serde(rename = "contentLang")]
+    pub content_lang: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-import { searchTMDB, getTMDBDetails, getTMDBPosterUrl, tmdbLanguageFromUI, parseSeasonSuffix, getTMDBSeasonPoster } from './tmdbService';
+import { searchTMDB, getTMDBDetails, getTMDBPosterUrl, tmdbLanguageFromUI, tmdbLanguageFromQuery, tmdbLanguageForItem, detectQueryLang, parseSeasonSuffix, getTMDBSeasonPoster } from './tmdbService';
 import { searchBangumi } from './bangumiService';
 import { usePluginStore } from '../store/usePluginStore';
 import { PluginExecutor } from './pluginService';
@@ -394,7 +394,9 @@ const fetchPosterFromTMDB = async (title: string, year: string, type: string): P
         // Search the season-stripped base title: TMDB search neither matches
         // "终极名单 第二季"-style queries reliably nor carries per-season entries.
         const { base, season } = parseSeasonSuffix(title);
-        const results = await searchTMDB(base, kind);
+        // Localize by the title's language, not the UI's — an English title
+        // under a Chinese UI should still get the English artwork.
+        const results = await searchTMDB(base, kind, tmdbLanguageFromQuery(base));
         if (!Array.isArray(results) || results.length === 0) return undefined;
         const yNum = /^\d{4}$/.test(String(year || '')) ? parseInt(String(year), 10) : null;
         let best: any = undefined;
@@ -417,7 +419,7 @@ const fetchPosterFromTMDB = async (title: string, year: string, type: string): P
         // Prefer the season-specific poster for later seasons; the show-level
         // poster_path is usually season 1's artwork.
         if (kind === 'tv' && season && typeof best?.id === 'number') {
-            const seasonPoster = await getTMDBSeasonPoster(best.id, season);
+            const seasonPoster = await getTMDBSeasonPoster(best.id, season, tmdbLanguageFromQuery(base));
             if (seasonPoster && await checkImage(seasonPoster)) return seasonPoster;
         }
         const url = getTMDBPosterUrl(best?.poster_path || null, 'w500');
@@ -1494,7 +1496,7 @@ export const runBackgroundSearch = async (query: string, type?: MediaType | 'All
             }
         }
         try {
-            const langKey = i18n.language.split('-')[0];
+            const langKey = detectQueryLang(q);
             const key = `media_tracker_search_${langKey}_${t}_${q.toLowerCase()}`;
             const tsKey = `${key}_ts`;
             localStorage.setItem(key, JSON.stringify(enriched));
@@ -2547,7 +2549,11 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
     } catch {}
   };
 
-  const langKey = i18n.language.split('-')[0];
+  // Result language follows the query language, not the UI language: an
+  // English query under a Chinese UI must return English titles/posters.
+  // The cache is keyed by query language for the same reason.
+  const queryLang = detectQueryLang(q);
+  const langKey = queryLang;
   // v2: relevance gating changed result quality — don't serve pre-v2 cached garbage.
   const cacheKey = `media_tracker_search_v2_${langKey}_${type || 'All'}_${q.toLowerCase()}`;
   const cacheTsKey = `${cacheKey}_ts`;
@@ -2573,7 +2579,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   } catch {}
   if (diagEnabled) addStep('缓存检查', cacheStepT0, 'cache');
 
-  const isChinese = i18n.language.startsWith('zh');
+  // Every language decision below (AI prompt, output-language clause, season
+  // search terms) follows the query language — the UI language only matters
+  // where there is no query (trending, background refreshes).
+  const isChinese = queryLang === 'zh';
   const enableBangumi = useAIStore.getState().enableBangumi;
 
   // Parallel Execution: TMDB, Bangumi, Plugins, and AI Search Context
@@ -2616,7 +2625,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       async () => {
         if (!type || type === 'All' || type === MediaType.MOVIE || type === MediaType.TV_SERIES) {
           const t = (type === MediaType.MOVIE) ? 'movie' : (type === MediaType.TV_SERIES) ? 'tv' : 'multi';
-          return await searchTMDB(q, t as any);
+          return await searchTMDB(q, t as any, tmdbLanguageFromQuery(q));
         }
         return [];
       },
@@ -2708,7 +2717,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       
       return {
           id: uuidv4(),
-          title: item.name_cn || item.name,
+          // Bangumi is a Chinese database; for a non-Chinese query prefer the
+          // original (often Japanese/romaji) name over the Chinese translation
+          // so results stay in the language the user searched in.
+          title: isChinese ? (item.name_cn || item.name) : (item.name || item.name_cn),
           directorOrAuthor: "",
           description: item.summary || "",
           releaseDate,
@@ -2905,9 +2917,9 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
           }
       }
 
-      // Output language must match the UI language (same rule as trending):
-      // the model otherwise mirrors whatever language the query/snippets use,
-      // producing mixed zh/en titles and descriptions.
+      // Output language must match the query language (same rule as the TMDB
+      // search above): the model otherwise mirrors whatever language the
+      // snippets use, producing mixed zh/en titles and descriptions.
       userPrompt += isChinese
           ? `\n[语言] 所有字段（title、directorOrAuthor、cast、description、latestUpdateInfo）必须全部用简体中文填写，外国作品使用通用中文译名。`
           : `\n[LANGUAGE] Fill ALL fields (title, directorOrAuthor, cast, description, latestUpdateInfo) in English; use the common English title for foreign works.`;
@@ -3068,7 +3080,9 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       else uniqueItems.set(key, mergeMediaItems(prev, item));
   }
 
-  let filtered = Array.from(uniqueItems.values()).filter(r => {
+  // Stamp the language these results were fetched in; add-to-collection
+  // persists it so later update checks keep the item in this language.
+  let filtered: MediaItem[] = Array.from(uniqueItems.values()).map(r => ({ ...r, contentLang: queryLang })).filter(r => {
       // OTHER results are noise from untyped sources — except when the user
       // explicitly asked for the Other filter, which would otherwise always
       // return zero rows (the strict type filter below can never match).
@@ -3113,10 +3127,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
           if (!tmdbId) return;
 
           detailCalls += 1;
-          const uiLang = tmdbLanguageFromUI();
-          let details = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang);
+          const lang = tmdbLanguageFromQuery(q);
+          let details = await getTMDBDetails(tmdbId, tmdbMediaType, lang);
           if (details && isUnknownText(details.overview)) {
-              const alt = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang === 'zh-CN' ? 'en-US' : 'zh-CN');
+              const alt = await getTMDBDetails(tmdbId, tmdbMediaType, lang === 'zh-CN' ? 'en-US' : 'zh-CN');
               if (alt && !isUnknownText(alt.overview)) details = { ...details, overview: alt.overview };
           }
           if (!details) return;
@@ -3474,7 +3488,7 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
       // also be recognizably the same work.
       const resolveTmdbTvId = async (it: MediaItem): Promise<number | undefined> => {
           const { base } = parseSeasonSuffix(it.title);
-          const candidates = await searchTMDB(base, 'tv');
+          const candidates = await searchTMDB(base, 'tv', tmdbLanguageForItem(it));
           if (!candidates || candidates.length === 0) return undefined;
           // TMDB titles often carry a disambiguating year ("Ranma½ (2024)");
           // strip it before comparing, it is not part of the work's name.
@@ -3533,7 +3547,10 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                   // counts from this check onward.
                   const tmdbId = (it.tmdbId && it.tmdbMediaType === 'tv') ? it.tmdbId : await resolveTmdbTvId(it);
                   if (tmdbId) {
-                      const details = await getTMDBDetails(tmdbId, 'tv', isChinese ? 'zh-CN' : 'en-US');
+                      // Authoritative details come back in the item's own
+                      // language (contentLang) — a saved English item must not
+                      // be re-localized by a Chinese-UI update check.
+                      const details = await getTMDBDetails(tmdbId, 'tv', tmdbLanguageForItem(it));
                       if (details) {
                           const result = buildTmdbUpdate(it.id, tmdbId, details);
                           if (result) {
@@ -3614,7 +3631,7 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
       }).join('\n');
 
       try {
-          const wikiTexts = await Promise.all(pendingForAI.map(item => getWikiContext(item.title, isChinese ? 'zh' : 'en')));
+          const wikiTexts = await Promise.all(pendingForAI.map(item => getWikiContext(item.title, tmdbLanguageForItem(item) === 'zh-CN' ? 'zh' : 'en')));
           const wikiContext = pendingForAI
               .map((item, i) => wikiTexts[i] ? `Wikipedia (${item.title}):\n${wikiTexts[i]}\n---` : '')
               .join('')
@@ -3823,7 +3840,7 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
                 // Season-stripped search: TMDB entries are show-level, so a
                 // "第X季"/"Season N" suffix would only break matching here too.
                 const { base } = parseSeasonSuffix(item.title);
-                const candidates = await searchTMDB(base, mapType);
+                const candidates = await searchTMDB(base, mapType, tmdbLanguageForItem(item));
                 const year = norm(item.releaseDate).slice(0, 4);
                 const best = (year && /^\d{4}$/.test(year))
                     ? candidates.find(c => (c.release_date || c.first_air_date || '').startsWith(year))
@@ -3835,10 +3852,13 @@ export const repairMediaItem = async (item: MediaItem): Promise<Partial<MediaIte
             }
 
             if (tmdbId) {
-                const uiLang = tmdbLanguageFromUI();
-                let details = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang);
+                // Repair in the language the item was found in (contentLang),
+                // not the current UI language — a saved English item stays
+                // English through repairs.
+                const itemLang = tmdbLanguageForItem(item);
+                let details = await getTMDBDetails(tmdbId, tmdbMediaType, itemLang);
                 if (details && isUnknownText(details.overview)) {
-                    const alt = await getTMDBDetails(tmdbId, tmdbMediaType, uiLang === 'zh-CN' ? 'en-US' : 'zh-CN');
+                    const alt = await getTMDBDetails(tmdbId, tmdbMediaType, itemLang === 'zh-CN' ? 'en-US' : 'zh-CN');
                     if (alt && !isUnknownText(alt.overview)) details = { ...details, overview: alt.overview };
                 }
                 if (details) {
@@ -4006,9 +4026,10 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
         const tmdb = await fetchPosterFromTMDB(searchTitle, yearToken, type);
         if (tmdb) return tmdb;
         // 2. Douban covers (Tauri backend; strong for zh titles, covers all types).
-        // Douban artwork is always Chinese-sourced, so skip it for non-zh UIs —
-        // otherwise an English UI gets English details under a Chinese poster.
-        if (isTauriEnv && i18n.language.startsWith('zh')) {
+        // Douban artwork is always Chinese-sourced, so skip it for non-Chinese
+        // titles — the gate follows the searched title, not the UI language,
+        // so an English search under a Chinese UI doesn't get a Chinese poster.
+        if (isTauriEnv && detectQueryLang(searchTitle) === 'zh') {
             try {
                 const kind = String(type || '').toLowerCase();
                 const t0 = performance.now();
@@ -4034,11 +4055,11 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
         // below gives Chinese titles a second chance through it).
         const omdb = await fetchPosterFromOMDB(searchTitle, year);
         if (omdb) return omdb;
-        // 4. Wikipedia page image (API; Tauri command or REST). Try the UI
-        // language first, then the other one — per-season articles for western
-        // shows usually exist only on en.wikipedia.
+        // 4. Wikipedia page image (API; Tauri command or REST). Try the
+        // searched title's language first, then the other one — per-season
+        // articles for western shows usually exist only on en.wikipedia.
         try {
-            const firstZh = wikiEn ? false : i18n.language.startsWith('zh');
+            const firstZh = wikiEn ? false : detectQueryLang(searchTitle) === 'zh';
             for (const langZh of [firstZh, !firstZh]) {
                 if (isTauriEnv) {
                     const jsonStr = await invoke<string>('wiki_pageimages', { title: searchTitle, lang_zh: langZh });
@@ -4095,8 +4116,9 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
     // its text results never carried poster pages well).
     if (searchProvider === 'yandex') return { candidates: [] };
 
-    // Construct a more specific query
-    const isChinese = i18n.language.startsWith('zh');
+    // Construct a more specific query — localized terms follow the searched
+    // title's language, not the UI language.
+    const isChinese = detectQueryLang(title) === 'zh';
     let query = "";
 
     if (isChinese) {

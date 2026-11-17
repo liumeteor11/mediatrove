@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw } from 'lucide-react';
 import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
+import { detectQueryLang } from '../services/tmdbService';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
 import { MediaCard } from '../components/MediaCard';
 import { useCollectionStore } from '../store/useCollectionStore';
@@ -129,7 +130,9 @@ export const SearchPage: React.FC = () => {
   }, []);
 
   const getSearchCacheKeys = (q: string) => {
-    const langKey = i18n.language.split('-')[0];
+    // Cache buckets follow the query language (same rule as searchMedia's
+    // v2 cache), not the UI language.
+    const langKey = detectQueryLang(q);
     const types: Array<MediaType | 'All'> = ['All', MediaType.MOVIE, MediaType.TV_SERIES, MediaType.BOOK, MediaType.COMIC, MediaType.SHORT_DRAMA, MediaType.MUSIC];
     return types.map(t => ({
       type: t,
@@ -140,7 +143,7 @@ export const SearchPage: React.FC = () => {
 
   const writeSearchCache = (q: string, type: MediaType | 'All', items: MediaItem[]) => {
     try {
-      const langKey = i18n.language.split('-')[0];
+      const langKey = detectQueryLang(q);
       const key = `media_tracker_search_${langKey}_${type}_${q.trim().toLowerCase()}`;
       const tsKey = `${key}_ts`;
       localStorage.setItem(key, JSON.stringify(items));

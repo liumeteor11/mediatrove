@@ -637,6 +637,7 @@ async fn call_tool(
                 parent_collection_id: None,
                 is_collection: Some(false),
                 is_pinned: None,
+                content_lang: None,
             };
             db.add_item_for_user(&username, item.clone())?;
             notify_changed(notify, &username, "add");
