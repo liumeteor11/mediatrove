@@ -547,7 +547,7 @@ export const SearchPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8 relative">
+    <div className="space-y-8 relative overflow-x-clip">
        {/* Spotlight Effect */}
        <div className="absolute top-[-100px] left-1/2 transform -translate-x-1/2 w-[600px] h-[600px] rounded-full blur-[100px] opacity-30 pointer-events-none bg-theme-accent" />
 

@@ -60,7 +60,11 @@ export const Navbar: React.FC = () => {
   };
 
   return (
-    <nav className="backdrop-blur-md border-b sticky top-0 z-50 transition-colors duration-300 bg-theme-surface/90 border-theme-border text-theme-text">
+    // pt-[env(safe-area-inset-top)]: Android 15 renders edge-to-edge, so the
+    // navbar would otherwise sit under the status bar (taps landing on the
+    // battery icon). Padding inside the navbar keeps the row below the system
+    // bar even while the navbar is stuck at viewport top; env() is 0 on desktop.
+    <nav className="pt-[env(safe-area-inset-top)] backdrop-blur-md border-b sticky top-0 z-50 transition-colors duration-300 bg-theme-surface/90 border-theme-border text-theme-text">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <Link 

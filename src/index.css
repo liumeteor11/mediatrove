@@ -81,6 +81,19 @@
     font-family: var(--font-theme);
     background-color: var(--bg-primary);
     color: var(--text-primary);
+    /* Keep content clear of the Android gesture bar (env() is 0 on desktop).
+       The status-bar side is padded inside Navbar itself: a body padding-top
+       would be scrolled away by the sticky top-0 navbar, which re-pins to the
+       viewport top under the system bar. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Decorative oversized elements (e.g. the 600px search-page glow) overflow
+     narrow screens and made the whole page draggable sideways with blank space
+     on the right. `clip` does not create a scroll container, so the sticky
+     navbar and normal vertical scrolling keep working. */
+  html {
+    overflow-x: clip;
   }
 }
 
