@@ -1,4 +1,4 @@
-use axum::{routing::get, Router, Json, extract::State, http::{HeaderMap, StatusCode}};
+use axum::{routing::{get, post}, Router, Json, extract::State, http::{HeaderMap, StatusCode}};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
@@ -15,10 +15,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// binary.
 pub type SyncNotifyFn = dyn Fn(&str, &str) + Send + Sync;
 
+/// A short-lived one-time code for QR/dynamic-code quick pairing: scanning it
+/// on the phone exchanges it (once, before expiry) for the username plus the
+/// persistent pairing token, so the long-lived token never has to be printed.
+#[derive(Debug, Clone)]
+pub struct PairCode {
+    pub username: String,
+    pub expires_at: u64,
+}
+
 #[derive(Clone)]
 pub struct SyncState {
     pub db: Arc<Database>,
     pub notify: Option<Arc<SyncNotifyFn>>,
+    pub pair_codes: Arc<RwLock<HashMap<String, PairCode>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -35,9 +45,33 @@ pub struct SyncService {
     port: u16,
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
     running: Arc<AtomicBool>,
+    /// Outstanding quick-pairing codes (QR payload / 6-digit dynamic code).
+    pair_codes: Arc<RwLock<HashMap<String, PairCode>>>,
     /// Our own mDNS instance fullname (`MediaTrove_{hostname}`) so discovery
     /// can skip advertising ourselves back to us.
     own_instance: Arc<RwLock<Option<String>>>,
+}
+
+/// How long a generated quick-pairing code stays valid. Short window: the code
+/// is meant to be scanned or typed within the same room, minutes apart.
+pub const PAIR_CODE_TTL_SECS: u64 = 300;
+
+/// Pure consume logic, split out for unit tests: removes expired entries, then
+/// pops `code` if it exists and is still valid, returning its username.
+pub(crate) fn consume_pair_code_at(
+    map: &mut HashMap<String, PairCode>,
+    code: &str,
+    now: u64,
+) -> Option<String> {
+    map.retain(|_, entry| entry.expires_at > now);
+    map.remove(code).map(|entry| entry.username)
+}
+
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl SyncService {
@@ -48,7 +82,46 @@ impl SyncService {
             port: 14567,
             peers: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(AtomicBool::new(false)),
+            pair_codes: Arc::new(RwLock::new(HashMap::new())),
             own_instance: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// TCP port the LAN sync server binds to (used to build QR payloads).
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Generate a fresh 6-digit one-time pairing code for `username`.
+    /// Expired leftovers are pruned; concurrent codes for the same user are
+    /// fine (each scan is consumed once by `/sync/pair`).
+    pub fn create_pair_code(&self, username: &str, now: u64) -> String {
+        let mut bytes = [0u8; 4];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut bytes);
+        let code = format!("{:06}", u32::from_be_bytes(bytes) % 1_000_000);
+        if let Ok(mut guard) = self.pair_codes.write() {
+            guard.retain(|_, entry| entry.expires_at > now);
+            guard.insert(code.clone(), PairCode {
+                username: username.to_string(),
+                expires_at: now + PAIR_CODE_TTL_SECS,
+            });
+        }
+        code
+    }
+
+    /// Everything a phone needs to pair in one scan: the one-time code, the
+    /// LAN address the sync server is reachable on, and the account to adopt.
+    pub fn create_pair_ticket(&self, username: &str) -> PairTicket {
+        let now = now_unix_secs();
+        let code = self.create_pair_code(username, now);
+        PairTicket {
+            code,
+            ip: select_advertise_ip(local_ip().ok())
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "127.0.0.1".to_string()),
+            port: self.port(),
+            username: username.to_string(),
+            expires_in: PAIR_CODE_TTL_SECS,
         }
     }
 
@@ -58,10 +131,15 @@ impl SyncService {
             return;
         }
 
-        let state = SyncState { db, notify };
+        let state = SyncState {
+            db,
+            notify,
+            pair_codes: self.pair_codes.clone(),
+        };
 
         let app = Router::new()
             .route("/sync/data", get(get_data).post(receive_data))
+            .route("/sync/pair", post(pair_handler))
             .with_state(state);
 
         // Bind on all interfaces: local_ip() can land on a virtual adapter
@@ -284,4 +362,41 @@ async fn receive_data(headers: HeaderMap, State(state): State<SyncState>, Json(p
         notify(&username, "sync");
     }
     Ok(Json(serde_json::json!({"ok": true})))
+}
+
+/// QR payload handed back to the desktop frontend for rendering; the phone
+/// scans it (or the user types `code`) to bootstrap the pairing handshake.
+#[derive(Serialize, Debug, Clone)]
+pub struct PairTicket {
+    pub code: String,
+    pub ip: String,
+    pub port: u16,
+    pub username: String,
+    pub expires_in: u64,
+}
+
+#[derive(Deserialize)]
+struct PairRequest {
+    code: String,
+}
+
+/// One-time code exchange for quick pairing: `POST /sync/pair {code}` →
+/// `{username, token}`. Deliberately unauthenticated (the code IS the
+/// credential) and single-use; the returned token is the persistent pairing
+/// code the phone will use for /sync/data afterwards.
+async fn pair_handler(
+    State(state): State<SyncState>,
+    Json(req): Json<PairRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let token = state.db.get_sync_token();
+    if token.is_empty() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let code = req.code.trim().to_string();
+    let now = now_unix_secs();
+    let claimed = (state.pair_codes.write())
+        .ok()
+        .and_then(|mut guard| consume_pair_code_at(&mut guard, &code, now))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    Ok(Json(serde_json::json!({ "username": claimed, "token": token })))
 }

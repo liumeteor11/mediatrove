@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { toDataURL as qrToDataURL } from 'qrcode';
+import { QrCode } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import { useAIStore } from '../store/useAIStore';
 import { useThemeStore } from '../store/useThemeStore';
+import { useTranslation } from 'react-i18next';
 
 interface PeerInfo {
     name: string;
@@ -11,18 +14,31 @@ interface PeerInfo {
     last_seen: number;
 }
 
+interface PairTicket {
+    code: string;
+    ip: string;
+    port: number;
+    username: string;
+    expires_in: number;
+}
+
 interface SyncModalProps {
     isOpen: boolean;
     onClose: () => void;
 }
 
 export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
+    const { t } = useTranslation();
     const [peers, setPeers] = useState<PeerInfo[]>([]);
     const [status, setStatus] = useState<string>('Idle');
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncToken, setSyncToken] = useState<string>('');
     const [tokenInput, setTokenInput] = useState<string>('');
     const [includeConfig, setIncludeConfig] = useState<boolean>(false);
+    const [pairTicket, setPairTicket] = useState<PairTicket | null>(null);
+    const [pairQrUrl, setPairQrUrl] = useState<string>('');
+    const [pairExpiresAt, setPairExpiresAt] = useState<number>(0);
+    const [pairRemaining, setPairRemaining] = useState<number>(0);
 
     useEffect(() => {
         if (isOpen) {
@@ -32,6 +48,16 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
             return () => clearInterval(interval);
         }
     }, [isOpen]);
+
+    // Countdown for the one-time pairing code; the QR stays visible but is
+    // marked expired so the user knows to regenerate instead of retrying.
+    useEffect(() => {
+        if (!pairExpiresAt) return;
+        const tick = () => setPairRemaining(Math.max(0, Math.ceil((pairExpiresAt - Date.now()) / 1000)));
+        tick();
+        const interval = setInterval(tick, 1000);
+        return () => clearInterval(interval);
+    }, [pairExpiresAt]);
 
     const loadSyncToken = async () => {
         try {
@@ -63,6 +89,36 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
         try {
             await navigator.clipboard.writeText(syncToken);
             setStatus('Pairing code copied');
+        } catch {
+            setStatus('Copy failed - select the code manually');
+        }
+    };
+
+    const buildPairPayload = (ticket: PairTicket): string =>
+        `mediatrove://pair?v=1&u=${encodeURIComponent(ticket.username)}&ip=${ticket.ip}&p=${ticket.port}&c=${ticket.code}`;
+
+    const generatePairQr = async () => {
+        try {
+            const username = useAuthStore.getState().user?.username || 'guest';
+            const ticket = await invoke<PairTicket>('create_pair_ticket', { username });
+            const url = await qrToDataURL(buildPairPayload(ticket), { width: 256, margin: 1 });
+            setPairTicket(ticket);
+            setPairQrUrl(url);
+            setPairExpiresAt(Date.now() + ticket.expires_in * 1000);
+            // The backend just minted the persistent pairing code if none was
+            // set, so the manual-code box above must not show a stale value.
+            loadSyncToken();
+            setStatus('QR ready - scan it on the phone login page');
+        } catch (e) {
+            setStatus('Failed to generate pairing QR: ' + String(e));
+        }
+    };
+
+    const copyPairPayload = async () => {
+        if (!pairTicket) return;
+        try {
+            await navigator.clipboard.writeText(buildPairPayload(pairTicket));
+            setStatus('Pairing info copied');
         } catch {
             setStatus('Copy failed - select the code manually');
         }
@@ -163,6 +219,54 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                     </div>
                     <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                         Both devices must use the same code. Copy it from this device and paste it on the peer, or set a code you both agree on.
+                    </p>
+                </div>
+
+                {/* Quick pairing: one-time code rendered as a QR (plus the code
+                    itself as a manual fallback) so the phone can log in and
+                    pull the collection in a single step. */}
+                <div className="mb-4 p-3 rounded border dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+                    <div className="flex items-center gap-2 mb-2">
+                        <QrCode className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                        <span className="text-xs font-medium text-gray-600 dark:text-gray-400">{t('sync.quick_pair_title')}</span>
+                    </div>
+                    {!pairQrUrl ? (
+                        <button
+                            onClick={generatePairQr}
+                            className="w-full px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+                        >
+                            {t('sync.quick_pair_generate')}
+                        </button>
+                    ) : (
+                        <div className="flex flex-col items-center gap-2">
+                            <img src={pairQrUrl} alt="MediaTrove pairing QR" className="w-40 h-40 rounded bg-white p-1" />
+                            <div className="text-center">
+                                <p className="text-sm font-mono font-semibold tracking-widest text-gray-800 dark:text-gray-200">{pairTicket?.code}</p>
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                    {pairRemaining > 0
+                                        ? t('sync.quick_pair_expires_in', { seconds: pairRemaining })
+                                        : t('sync.quick_pair_expired')}
+                                </p>
+                            </div>
+                            <div className="flex gap-2 w-full">
+                                <button
+                                    onClick={copyPairPayload}
+                                    disabled={pairRemaining === 0}
+                                    className="flex-1 px-2 py-1.5 text-xs rounded border dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50"
+                                >
+                                    {t('sync.quick_pair_copy')}
+                                </button>
+                                <button
+                                    onClick={generatePairQr}
+                                    className="flex-1 px-2 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+                                >
+                                    {t('sync.quick_pair_refresh')}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                        {t('sync.quick_pair_desc')}
                     </p>
                 </div>
 

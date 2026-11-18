@@ -942,3 +942,56 @@ fn test_merge_chat_sessions_newer_wins() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn test_pair_code_consume_expiry() {
+    use crate::sync::{consume_pair_code_at, PairCode};
+    use std::collections::HashMap;
+
+    let now: u64 = 1_000;
+    let mut map = HashMap::new();
+    map.insert("123456".to_string(), PairCode { username: "alice".into(), expires_at: now + 100 });
+    map.insert("000000".to_string(), PairCode { username: "bob".into(), expires_at: now + 200 });
+
+    // Expired entries are pruned on lookup and cannot be redeemed.
+    map.get_mut("123456").unwrap().expires_at = now;
+    assert_eq!(consume_pair_code_at(&mut map, "123456", now), None);
+
+    // Valid code is redeemed exactly once, then gone.
+    assert_eq!(consume_pair_code_at(&mut map, "000000", now).as_deref(), Some("bob"));
+    assert_eq!(consume_pair_code_at(&mut map, "000000", now), None);
+    assert!(map.is_empty());
+
+    // Unknown codes fail without side effects.
+    assert_eq!(consume_pair_code_at(&mut map, "999999", now), None);
+}
+
+#[test]
+fn test_update_user_password() {
+    use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+
+    let path = std::env::temp_dir().join(format!("mediatrove_test_reset_pw_{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let db = crate::database::Database::new_at_path(path.clone());
+
+    db.add_user(crate::models::UserRecord {
+        username: "alice".into(),
+        password_hash: "$argon2id$v=19$m=19456,t=2,p=1$fake$fakeoldhash".into(),
+        created_at: 0,
+    }).unwrap();
+
+    // Unknown user is rejected.
+    assert_eq!(db.update_user_password("ghost", "h".into()).unwrap_err(), "USER_NOT_FOUND");
+
+    // Reset replaces the hash in place.
+    let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let new_hash = Argon2::default().hash_password(b"newpass123", &salt).unwrap().to_string();
+    db.update_user_password("alice", new_hash.clone()).unwrap();
+
+    let record = db.find_user("alice").unwrap();
+    let parsed = PasswordHash::new(&record.password_hash).unwrap();
+    assert!(Argon2::default().verify_password(b"newpass123", &parsed).is_ok());
+    assert!(Argon2::default().verify_password(b"oldpass", &parsed).is_err());
+
+    let _ = std::fs::remove_file(&path);
+}

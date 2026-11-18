@@ -1915,12 +1915,34 @@ fn login_user(username: String, password: String, db: State<Arc<Database>>) -> R
     }
 }
 
+/// Local forgot-password recovery. Accounts only exist on the device that
+/// created them (users live in the local collection.json next to the data),
+/// so there is no server to email a reset link — a reset simply re-hashes the
+/// password in place and leaves all collection data untouched. The gate is
+/// profile separation on a shared machine, not encryption, so this tradeoff
+/// is acceptable for a local media tracker.
+#[command]
+fn reset_user_password(username: String, new_password: String, db: State<Arc<Database>>) -> Result<(), String> {
+    let u = username.trim();
+    if new_password.len() < 6 { return Err("Password too short".to_string()); }
+    if db.find_user(u).is_none() { return Err("USER_NOT_FOUND".to_string()); }
+
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default()
+        .hash_password(new_password.as_bytes(), &salt)
+        .map_err(|e| e.to_string())?
+        .to_string();
+    db.update_user_password(u, hash)
+}
+
 // --- Sync Commands ---
 
-#[command]
-async fn start_sync_server(app: tauri::AppHandle, sync: State<'_, sync::SyncService>, db: State<'_, Arc<Database>>) -> Result<(), String> {
-    let db = db.inner().clone();
-    let sync = sync.inner().clone();
+/// Start the LAN sync server in the background (idempotent: the service
+/// ignores a second start while it is already running).
+fn spawn_sync_server(app: &AppHandle, sync: &sync::SyncService, db: &Arc<Database>) {
+    let db = db.clone();
+    let sync = sync.clone();
+    let app = app.clone();
     // Decoupled callback (same rationale as mcp::NotifyFn): keeps the Tauri
     // AppHandle out of sync.rs so the test binary stays GUI-free.
     let notify: Arc<sync::SyncNotifyFn> = Arc::new(move |username: &str, action: &str| {
@@ -1932,7 +1954,72 @@ async fn start_sync_server(app: tauri::AppHandle, sync: State<'_, sync::SyncServ
     tokio::spawn(async move {
         sync.start_server(db, Some(notify)).await;
     });
+}
+
+#[command]
+async fn start_sync_server(app: tauri::AppHandle, sync: State<'_, sync::SyncService>, db: State<'_, Arc<Database>>) -> Result<(), String> {
+    spawn_sync_server(&app, sync.inner(), db.inner());
     Ok(())
+}
+
+/// Generate a short-lived one-time pairing ticket (QR payload / 6-digit code)
+/// for quick login from the phone. Also makes sure the LAN server is running
+/// and that a persistent pairing code exists — quick pairing must work without
+/// the user ever having opened Device Sync before.
+#[command]
+async fn create_pair_ticket(
+    app: tauri::AppHandle,
+    username: String,
+    sync: State<'_, sync::SyncService>,
+    db: State<'_, Arc<Database>>,
+) -> Result<sync::PairTicket, String> {
+    let username = username.trim().to_string();
+    if username.is_empty() {
+        return Err("no_user".to_string());
+    }
+    spawn_sync_server(&app, sync.inner(), db.inner());
+    if db.get_sync_token().is_empty() {
+        let mut bytes = [0u8; 12];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut bytes);
+        db.set_sync_token(format!("MT-{}", hex::encode(bytes)))?;
+    }
+    Ok(sync.inner().create_pair_ticket(&username))
+}
+
+#[derive(Serialize)]
+struct PairClaim {
+    username: String,
+    token: String,
+}
+
+/// Phone side of quick pairing: exchange the one-time code shown in the
+/// desktop's QR for the account name plus the persistent pairing token.
+#[command]
+async fn pair_with_peer(peer_ip: String, peer_port: u16, code: String) -> Result<PairClaim, String> {
+    // LAN peers must be reached directly: the system proxy (if any) has no
+    // route to them (same rationale as sync_with_peer).
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("http://{}:{}/sync/pair", peer_ip, peer_port))
+        .json(&serde_json::json!({ "code": code.trim() }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("pair_code_invalid".to_string());
+    }
+    if !resp.status().is_success() {
+        return Err(format!("pair_peer_error: {}", resp.status()));
+    }
+    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(PairClaim {
+        username: body.get("username").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        token: body.get("token").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+    })
 }
 
 #[command]
@@ -2224,11 +2311,14 @@ pub fn run() {
             remove_chat_session,
             register_user,
             login_user,
+            reset_user_password,
             get_sync_token,
             set_sync_token,
             start_sync_server,
             get_peers,
             sync_with_peer,
+            create_pair_ticket,
+            pair_with_peer,
             mcp_get_status,
             mcp_set_config,
             mcp_chat_reply

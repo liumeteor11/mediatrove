@@ -135,6 +135,21 @@ jobs:
             echo "::warning::AndroidManifest.xml not found — microphone permissions were not injected."
           fi
 
+      - name: Grant Android camera permission
+        # Same constraint as the microphone step above: the login page's QR
+        # quick-login scanner needs getUserMedia(video), and wry only grants it
+        # when CAMERA is declared in the regenerated manifest.
+        run: |
+          m=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          if [ -f "$m" ]; then
+            if ! grep -q 'android.permission.CAMERA' "$m"; then
+              sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA" />\n    <application|' "$m"
+              echo "Camera permission injected into AndroidManifest.xml"
+            fi
+          else
+            echo "::warning::AndroidManifest.xml not found — camera permission was not injected."
+          fi
+
       - name: Build Android APK
         run: npm run tauri android build -- --apk true
         env:

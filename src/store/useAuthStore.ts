@@ -19,6 +19,12 @@ interface AuthState {
   user: User | null;
   login: (username: string, password?: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
+  /** Seat an identity established out-of-band (QR / pairing-code quick login):
+   * the pairing handshake with the peer already proved the account, so no
+   * local password check happens here. */
+  adoptUser: (username: string) => void;
+  /** Local forgot-password recovery (see reset_user_password). */
+  resetPassword: (username: string, newPassword: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -41,6 +47,13 @@ export const useAuthStore = create<AuthState>()(
         }
         const result = await invoke<{ username: string }>('register_user', { username, password });
         set({ user: { username: result.username, lastBackup: new Date().toISOString() } });
+      },
+      adoptUser: (username) => {
+        set({ user: { username: username.trim(), lastBackup: new Date().toISOString() } });
+      },
+      resetPassword: async (username, newPassword) => {
+        if (!isTauri) return;
+        await invoke('reset_user_password', { username, newPassword });
       },
       logout: () => set({ user: null }),
     }),

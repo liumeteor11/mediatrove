@@ -320,4 +320,16 @@ impl Database {
         drop(data);
         self.save()
     }
+
+    /// Replace a local account's password hash (forgot-password reset).
+    /// Collection data is untouched; only the auth record changes.
+    pub fn update_user_password(&self, username: &str, password_hash: String) -> Result<(), String> {
+        let mut data = self.cache.lock().map_err(|e| e.to_string())?;
+        match data.users.iter_mut().find(|u| u.username == username) {
+            Some(user) => user.password_hash = password_hash,
+            None => return Err("USER_NOT_FOUND".to_string()),
+        }
+        drop(data);
+        self.save()
+    }
 }
