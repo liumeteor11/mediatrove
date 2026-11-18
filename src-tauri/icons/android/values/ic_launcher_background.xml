@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <color name="ic_launcher_background">#fff</color>
+  <!-- Brand indigo matching the desktop icon (public/icon.svg fill). The
+       adaptive-icon foreground bakes in a rounded indigo square, so any
+       launcher mask exposes this color at the corners - white (#fff) made the
+       APK icon look like an indigo square floating on white, unlike desktop. -->
+  <color name="ic_launcher_background">#4f46e5</color>
 </resources>
