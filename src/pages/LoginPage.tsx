@@ -116,7 +116,7 @@ export const LoginPage: React.FC = () => {
         )}
 
         {mode === 'quick' ? (
-          <QuickPairLogin onDone={() => navigate('/')} />
+          <QuickPairLogin onDone={() => navigate('/')} onExit={() => { setServerError(null); setMode('login'); }} />
         ) : mode === 'reset' ? (
         <form onSubmit={resetForm.handleSubmit(onReset)} className="space-y-6">
           <div>

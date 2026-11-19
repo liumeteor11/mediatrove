@@ -50,7 +50,7 @@ const randomPassword = (): string => {
     return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 };
 
-export const QuickPairLogin: React.FC<{ onDone: () => void }> = ({ onDone }) => {
+export const QuickPairLogin: React.FC<{ onDone: () => void; onExit?: () => void }> = ({ onDone, onExit }) => {
     const { t } = useTranslation();
     const [cameraState, setCameraState] = useState<'idle' | 'starting' | 'scanning' | 'error'>('idle');
     const [cameraError, setCameraError] = useState<string>('');
@@ -379,6 +379,21 @@ export const QuickPairLogin: React.FC<{ onDone: () => void }> = ({ onDone }) => 
             </label>
 
             <p className="text-xs text-theme-subtext">{t('login.quick.lan_note')}</p>
+
+            {/* Escape hatch: without this, a failed pairing (no camera, expired
+                code, no peers) strands the user on this screen with no way back. */}
+            {onExit && (
+                <div className="pt-2 text-center">
+                    <button
+                        type="button"
+                        disabled={busy}
+                        className="text-theme-accent hover:underline text-sm disabled:opacity-50"
+                        onClick={onExit}
+                    >
+                        {t('login.back_to_login')}
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

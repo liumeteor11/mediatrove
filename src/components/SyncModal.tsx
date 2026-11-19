@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toDataURL as qrToDataURL } from 'qrcode';
-import { QrCode } from 'lucide-react';
+import { QrCode, X } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import { useAIStore } from '../store/useAIStore';
 import { useThemeStore } from '../store/useThemeStore';
@@ -48,6 +48,17 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
             return () => clearInterval(interval);
         }
     }, [isOpen]);
+
+    // Close on Escape: the modal content (with the generated QR) can grow
+    // taller than the window, so a keyboard escape hatch is essential.
+    useEffect(() => {
+        if (!isOpen) return;
+        const handleKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+    }, [isOpen, onClose]);
 
     // Countdown for the one-time pairing code; the QR stays visible but is
     // marked expired so the user knows to regenerate instead of retrying.
@@ -182,14 +193,26 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg w-96 shadow-2xl border dark:border-gray-700">
-                <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Device Sync
-                </h2>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm" onClick={onClose}>
+            <div
+                className="bg-white dark:bg-gray-800 p-6 rounded-lg w-96 max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto shadow-2xl border dark:border-gray-700"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="flex items-start justify-between gap-2 mb-4">
+                    <h2 className="text-xl font-bold dark:text-white flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Device Sync
+                    </h2>
+                    <button
+                        onClick={onClose}
+                        className="p-1.5 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex-shrink-0"
+                        aria-label="Close"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{status}</p>
 
                 <div className="mb-4 p-3 rounded border dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
