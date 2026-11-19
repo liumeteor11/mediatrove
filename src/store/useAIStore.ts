@@ -156,7 +156,10 @@ export const useAIStore = create<AIConfigState>()(
       reasoningEffort: 'auto',
       searchReasoning: 'off',
       distillReasoning: 'auto',
-      enableTrending: true,
+      // Off by default: new users have no AI key yet, so the trending feed
+      // would only render placeholder posters. They can enable it in the
+      // dashboard AI settings once configured.
+      enableTrending: false,
       trendingMode: 'recent',
       trendingPrompt: '',
       lastSearchDurationMs: null,

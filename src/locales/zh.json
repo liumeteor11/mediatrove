@@ -281,6 +281,7 @@
     "default_prompt": "[任务] 使用联网搜索工具，推荐最近 3 个月内上映、上线或完结的最热门、评分最高的影视作品。\n[数量] 4 部，电影 / 电视剧 / 动漫均可。\n[时间] 以今天的日期为准，仅限最近 3 个月；完结作品以最后一集或最终季的播出日期为准。\n[标准] 优先高热度、高人气、高评分。",
     "no_results_found": "未找到结果。请尝试不同的查询。",
     "network_unavailable": "网络不可达或未配置：请检查网络或在“AI 配置”中设置 Provider 与 API Key，或切换至 DuckDuckGo 搜索。",
+    "trending_off_hint": "提示：配置 AI 服务后，可在仪表盘设置中开启热门推荐功能。",
     "search_error": "搜索请求失败。",
     "search_taking_long": "搜索耗时较长，请耐心等待...",
     "searching_wait": "正在搜索，请稍候...",

@@ -281,6 +281,7 @@
     "default_prompt": "[Task] Use the web search tool to recommend the most popular, highest-rated movies / TV series / anime released or concluded within the last 3 months.\n[Count] 4 titles (movies, TV series, or anime).\n[Time] Relative to today's date, within the last 3 months only; for completed series, count from the final episode/season air date.\n[Criteria] Prioritize high popularity and high ratings.",
     "no_results_found": "No results found. Please try a different query.",
     "network_unavailable": "Network unavailable or not configured: check connection or set AI Provider & API Key in Settings, or switch to DuckDuckGo search.",
+    "trending_off_hint": "Tip: after configuring AI services, you can enable Trending Recommendations in the Dashboard settings.",
     "search_error": "An error occurred while searching. Please check your API key.",
     "search_taking_long": "Search is taking longer than expected, please wait...",
     "searching_wait": "Searching, please wait...",

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw } from 'lucide-react';
+import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw, Info } from 'lucide-react';
 import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
 import { detectQueryLang } from '../services/tmdbService';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
@@ -31,6 +31,9 @@ const monthsAgoLocal = (months: number): string => {
 export const SearchPage: React.FC = () => {
   const { t, i18n } = useTranslation();
   const { trendingPrompt, trendingMode, setConfig, enableTrending } = useAIStore();
+  // Non-reactive read for the new-user hint below: re-evaluated on every
+  // render of this component, which is enough for a landing-state hint.
+  const hasAIKey = !!useAIStore.getState().getDecryptedApiKey();
   
   // Use global search store
   const { 
@@ -122,8 +125,15 @@ export const SearchPage: React.FC = () => {
   useEffect(() => {
     const handleReset = () => {
         cancelOps(); // Cancel any ongoing operations
-        resetSearch(); // Reset store state
-        loadTrending(); // Load trending
+        resetSearch(); // Reset store state (re-seeds isTrending=true)
+        // Read the flag fresh: this effect captures a stale closure otherwise.
+        if (useAIStore.getState().enableTrending) {
+            loadTrending(); // Load trending
+        } else {
+            // resetSearch() re-seeds isTrending=true; flip it back off so the
+            // disabled trending section never re-appears via the logo click.
+            useSearchStore.getState().setIsTrending(false);
+        }
     };
     window.addEventListener('reset-search', handleReset);
     return () => window.removeEventListener('reset-search', handleReset);
@@ -640,7 +650,17 @@ export const SearchPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Results Section */}
+      {/* Results Section — hidden entirely while trending is disabled and
+          nothing has been searched yet; new users without an AI key get a
+          one-line pointer to the dashboard toggle instead of placeholders. */}
+      {!enableTrending && !query.trim() && results.length === 0 && !searchLoading && !trendingLoading && !error ? (
+        !hasAIKey && (
+          <div className="flex items-center justify-center gap-2 text-sm text-theme-subtext py-10">
+            <Info className="w-4 h-4 flex-shrink-0" />
+            <span>{t('search_page.trending_off_hint')}</span>
+          </div>
+        )
+      ) : (
       <div className="space-y-6">
         <div className="flex items-center gap-2 mb-6 border-b pb-4 border-theme-border">
             {isTrending ? (
@@ -711,6 +731,7 @@ export const SearchPage: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* Edit Prompt Modal */}
       {isPromptModalOpen && (
