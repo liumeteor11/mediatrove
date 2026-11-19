@@ -563,10 +563,10 @@ export const SearchPage: React.FC = () => {
 
       {/* Search Header */}
       <div className="text-center mb-12 space-y-6 relative z-10">
-        <h1 className="text-4xl md:text-6xl heading-strong text-theme-accent-warm">
+        <h1 className="text-3xl md:text-6xl heading-strong text-theme-accent-warm">
           {t('search_page.title')}
         </h1>
-        <p className="text-lg max-w-2xl mx-auto text-theme-subtext">
+        <p className="text-base md:text-lg max-w-2xl mx-auto text-theme-subtext">
           {t('search_page.subtitle')}
         </p>
         
@@ -593,7 +593,7 @@ export const SearchPage: React.FC = () => {
                 }
             }}
             placeholder={t('search_page.input_placeholder')}
-            className="relative w-full pl-12 pr-40 py-4 rounded-full border-2 focus:outline-none focus:ring-2 shadow-xl text-lg transition-all bg-theme-surface border-theme-border text-theme-text focus:border-theme-accent focus:ring-theme-accent/20 placeholder-theme-subtext"
+            className="relative w-full pl-12 pr-32 py-3 rounded-full border-2 focus:outline-none focus:ring-2 shadow-xl text-base sm:pr-40 sm:py-4 sm:text-lg transition-all bg-theme-surface border-theme-border text-theme-text focus:border-theme-accent focus:ring-theme-accent/20 placeholder-theme-subtext"
           />
           <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-6 h-6 text-theme-subtext" />
 
@@ -624,7 +624,7 @@ export const SearchPage: React.FC = () => {
             <button 
               type="submit"
               disabled={searchLoading || !query.trim()}
-              className="h-full px-6 rounded-full font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 bg-theme-accent text-theme-bg hover:bg-theme-accent-hover hover:shadow-lg border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent flex items-center justify-center gap-2 min-w-[92px]"
+              className="h-full px-4 sm:px-6 rounded-full font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 bg-theme-accent text-theme-bg hover:bg-theme-accent-hover hover:shadow-lg border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent flex items-center justify-center gap-2 min-w-0 sm:min-w-[92px]"
             >
               {searchLoading && <Loader2 className="w-5 h-5 animate-spin" />}
               <span>{t('search_page.search_btn')}</span>
@@ -709,7 +709,7 @@ export const SearchPage: React.FC = () => {
         )}
 
         {(searchLoading || (trendingLoading && results.length === 0)) ? (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
               {[1, 2, 3, 4].map((i) => (
                 <div key={i} className="rounded-xl aspect-[1/1.48] animate-pulse border p-4 bg-theme-surface border-theme-border">
                     <div className="w-full h-2/3 rounded-lg mb-4 bg-theme-bg"></div>
@@ -719,7 +719,7 @@ export const SearchPage: React.FC = () => {
               ))}
            </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-y-8 gap-x-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
             {results.map((item, index) => (
               <MediaCard 
                 key={item.id} 

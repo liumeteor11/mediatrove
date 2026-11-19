@@ -331,18 +331,18 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
         <div className="p-6 rounded-theme shadow-theme border bg-theme-surface border-theme-border">
             <h3 className="text-sm font-medium text-theme-subtext">{t('dashboard.total_collection')}</h3>
-            <p className="text-4xl font-bold mt-2 text-theme-text">{stats.total}</p>
+            <p className="text-3xl md:text-4xl font-bold mt-2 text-theme-text">{stats.total}</p>
         </div>
         <div className="p-6 rounded-theme shadow-theme border bg-theme-surface border-theme-border">
             <h3 className="text-sm font-medium text-theme-subtext">{t('dashboard.completed')}</h3>
-            <p className="text-4xl font-bold text-green-600 mt-2">{stats.watched}</p>
+            <p className="text-3xl md:text-4xl font-bold text-green-600 mt-2">{stats.watched}</p>
         </div>
         <div className="p-6 rounded-theme shadow-theme border bg-theme-surface border-theme-border">
             <h3 className="text-sm font-medium text-theme-subtext">{t('dashboard.to_watch')}</h3>
-            <p className="text-4xl font-bold text-blue-600 mt-2">{stats.toWatch}</p>
+            <p className="text-3xl md:text-4xl font-bold text-blue-600 mt-2">{stats.toWatch}</p>
         </div>
       </div>
 

@@ -152,8 +152,9 @@ const App: React.FC = () => {
 
       <ToastContainer
           aria-label={t('common.notifications')}
-          position="bottom-right" 
-          autoClose={3000} 
+          position="bottom-right"
+          style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}
+          autoClose={3000}
           hideProgressBar={false}
           newestOnTop
           closeOnClick

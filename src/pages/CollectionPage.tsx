@@ -473,7 +473,7 @@ export const CollectionPage: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 mb-6 md:mb-8">
         <div className="flex items-center gap-4">
             {viewingCollectionId && (
                 <button 
@@ -528,7 +528,7 @@ export const CollectionPage: React.FC = () => {
                 </button>
             </div>
         ) : (
-            <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex flex-col sm:flex-row gap-3 md:gap-4">
                  <div className="relative">
                     <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-subtext" />
                     <input 
@@ -648,7 +648,7 @@ export const CollectionPage: React.FC = () => {
                     </div>
                 </div>
                 
-                <div className="flex gap-2 items-center border-l border-theme-border pl-4 relative" ref={menuRef}>
+                <div className="flex gap-2 items-center pl-4 sm:border-l sm:border-theme-border relative" ref={menuRef}>
                    <button
                      onClick={() => setShowMenu(!showMenu)}
                      className="p-2 rounded-lg bg-theme-surface border border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors"
@@ -705,7 +705,7 @@ export const CollectionPage: React.FC = () => {
               items={filteredCollection.map(i => i.id)}
               strategy={rectSortingStrategy}
             >
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5 gap-y-8 gap-x-6">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
                     {filteredCollection.map((item, index) => (
                         <SortableItem 
                             key={item.id} 
@@ -732,7 +732,7 @@ export const CollectionPage: React.FC = () => {
             </SortableContext>
           </DndContext>
         ) : (
-            <motion.div layout className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5 gap-y-8 gap-x-6">
+            <motion.div layout className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
                 <AnimatePresence>
                     {filteredCollection.map((item, index) => (
                         <MediaCard 
@@ -780,7 +780,7 @@ export const CollectionPage: React.FC = () => {
               onClick={() => setSelectedId(null)}
             />
             <div className="fixed inset-0 grid place-items-center z-[70] pointer-events-none p-4 md:p-8">
-               <div className="pointer-events-auto h-[85vh] aspect-[1/1.48] shadow-2xl relative max-w-full">
+               <div className="pointer-events-auto h-[70vh] md:h-[85vh] aspect-[1/1.48] shadow-2xl relative max-w-full">
                   {collection.find(item => item.id === selectedId) && (
                      <MediaCard
                         item={collection.find(item => item.id === selectedId)!}
