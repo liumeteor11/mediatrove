@@ -250,9 +250,9 @@
     "delete": "Delete",
     "test": "Test",
     "no_domains": "No domains",
-    "clear_cache": "Clear Cache",
-    "cache_cleared": "Cache cleared",
-    "cache_clear_failed": "Failed to clear cache"
+    "clear_cache": "Clear Search Cache",
+    "cache_cleared": "Search cache cleared",
+    "cache_clear_failed": "Failed to clear search cache"
   },
   "search_page": {
     "title": "Discover Your Next Obsession",
@@ -702,12 +702,37 @@
     "year_label": "Year"
   },
   "sync": {
+    "code_copied": "Pairing code copied",
+    "code_save_failed": "Failed to save pairing code: {{error}}",
+    "code_saved": "Pairing code saved",
+    "code_too_short": "Pairing code must be at least 4 characters",
+    "copy": "Copy",
+    "copy_failed": "Copy failed — select the code manually",
+    "include_config": "Also sync app config — AI keys, distilled characters and chats (encrypted with the pairing code). Peer settings overwrite yours; both devices must use the same pairing code.",
+    "looking_for_peers": "Looking for devices on LAN...",
+    "pair_info_copied": "Pairing info copied",
+    "pairing_code_desc": "Both devices must use the same code. Copy it from this device and paste it on the peer, or set a code you both agree on.",
+    "pairing_code_label": "Pairing Code (shared with peers)",
+    "pairing_code_placeholder": "e.g. MT-4821",
+    "qr_generate_failed": "Failed to generate pairing QR: {{error}}",
+    "qr_ready": "QR ready — scan it on the phone login page",
     "quick_pair_title": "Quick Pairing",
     "quick_pair_generate": "Generate Pairing QR",
     "quick_pair_expires_in": "Expires in {{seconds}}s",
     "quick_pair_expired": "Expired - regenerate",
     "quick_pair_copy": "Copy pairing info",
     "quick_pair_refresh": "Regenerate",
-    "quick_pair_desc": "On the phone login page choose Quick Login and scan this QR, or type the 6-digit code into manual pairing. Valid for 5 minutes; both devices must be on the same LAN."
+    "quick_pair_desc": "On the phone login page choose Quick Login and scan this QR, or type the 6-digit code into manual pairing. Valid for 5 minutes; both devices must be on the same LAN.",
+    "save": "Save",
+    "status_start_error": "Error starting service: {{error}}",
+    "status_starting": "Starting sync service...",
+    "sync": "Sync",
+    "sync_completed": "Sync completed!",
+    "sync_failed": "Sync failed: {{error}}",
+    "sync_failed_auth": "Sync failed: pairing code mismatch. Set the same code on both devices.",
+    "sync_failed_decrypt": "Sync failed: could not decrypt the peer profile. Both devices must use the same pairing code.",
+    "syncing": "Syncing...",
+    "syncing_with": "Syncing with {{name}}...",
+    "title": "Device Sync"
   }
 }

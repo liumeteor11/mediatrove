@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toDataURL as qrToDataURL } from 'qrcode';
-import { QrCode, X } from 'lucide-react';
+import { ChevronDown, QrCode, X } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import { useAIStore } from '../store/useAIStore';
 import { useThemeStore } from '../store/useThemeStore';
@@ -30,7 +30,9 @@ interface SyncModalProps {
 export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
     const { t } = useTranslation();
     const [peers, setPeers] = useState<PeerInfo[]>([]);
-    const [status, setStatus] = useState<string>('Idle');
+    // Empty = nothing worth saying; scan progress lives in the peer list's
+    // own spinner, so the header line stays free of a duplicate indicator.
+    const [status, setStatus] = useState<string>('');
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncToken, setSyncToken] = useState<string>('');
     const [tokenInput, setTokenInput] = useState<string>('');
@@ -39,6 +41,10 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
     const [pairQrUrl, setPairQrUrl] = useState<string>('');
     const [pairExpiresAt, setPairExpiresAt] = useState<number>(0);
     const [pairRemaining, setPairRemaining] = useState<number>(0);
+    // The manual pairing-code block starts expanded; the QR flow collapses it
+    // so the minted long-lived code never sits next to the 6-digit one-time
+    // code reading like a second, competing code.
+    const [codeOpen, setCodeOpen] = useState<boolean>(true);
 
     useEffect(() => {
         if (isOpen) {
@@ -83,15 +89,15 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
     const saveSyncToken = async () => {
         const trimmed = tokenInput.trim();
         if (trimmed.length < 4) {
-            setStatus('Pairing code must be at least 4 characters');
+            setStatus(t('sync.code_too_short'));
             return;
         }
         try {
             await invoke('set_sync_token', { token: trimmed });
             setSyncToken(trimmed);
-            setStatus('Pairing code saved');
+            setStatus(t('sync.code_saved'));
         } catch (e) {
-            setStatus('Failed to save pairing code: ' + String(e));
+            setStatus(t('sync.code_save_failed', { error: String(e) }));
         }
     };
 
@@ -99,9 +105,9 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
         if (!syncToken) return;
         try {
             await navigator.clipboard.writeText(syncToken);
-            setStatus('Pairing code copied');
+            setStatus(t('sync.code_copied'));
         } catch {
-            setStatus('Copy failed - select the code manually');
+            setStatus(t('sync.copy_failed'));
         }
     };
 
@@ -116,12 +122,13 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
             setPairTicket(ticket);
             setPairQrUrl(url);
             setPairExpiresAt(Date.now() + ticket.expires_in * 1000);
+            setCodeOpen(false);
             // The backend just minted the persistent pairing code if none was
             // set, so the manual-code box above must not show a stale value.
             loadSyncToken();
-            setStatus('QR ready - scan it on the phone login page');
+            setStatus(t('sync.qr_ready'));
         } catch (e) {
-            setStatus('Failed to generate pairing QR: ' + String(e));
+            setStatus(t('sync.qr_generate_failed', { error: String(e) }));
         }
     };
 
@@ -129,19 +136,21 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
         if (!pairTicket) return;
         try {
             await navigator.clipboard.writeText(buildPairPayload(pairTicket));
-            setStatus('Pairing info copied');
+            setStatus(t('sync.pair_info_copied'));
         } catch {
-            setStatus('Copy failed - select the code manually');
+            setStatus(t('sync.copy_failed'));
         }
     };
 
     const startServer = async () => {
         try {
-            setStatus('Starting Sync Service...');
+            setStatus(t('sync.status_starting'));
             await invoke('start_sync_server');
-            setStatus('Scanning for devices...');
+            // No "scanning" line here: the peer list below already shows its
+            // own spinner + caption, and a second one above just duplicated it.
+            setStatus('');
         } catch (e) {
-            setStatus('Error starting service: ' + String(e));
+            setStatus(t('sync.status_start_error', { error: String(e) }));
         }
     };
 
@@ -158,7 +167,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
 
     const handleSync = async (peer: PeerInfo) => {
         setIsSyncing(true);
-        setStatus(`Syncing with ${peer.name}...`);
+        setStatus(t('sync.syncing_with', { name: peer.name }));
         try {
             const username = useAuthStore.getState().user?.username || 'guest';
             await invoke('sync_with_peer', { peerIp: peer.ip, peerPort: peer.port, username, includeConfig: includeConfig });
@@ -174,17 +183,17 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                     console.error('Failed to adopt synced config into stores', e);
                 }
             }
-            setStatus('Sync Completed!');
+            setStatus(t('sync.sync_completed'));
             setTimeout(() => {
                 window.location.reload();
             }, 1000);
         } catch (e) {
             const msg = String(e);
             setStatus(msg.includes('sync_auth_failed')
-                ? 'Sync Failed: pairing code mismatch. Set the same code on both devices.'
+                ? t('sync.sync_failed_auth')
                 : msg.includes('sync_config_decrypt_failed')
-                ? 'Sync Failed: could not decrypt the peer profile. Both devices must use the same pairing code.'
-                : 'Sync Failed: ' + msg);
+                ? t('sync.sync_failed_decrypt')
+                : t('sync.sync_failed', { error: msg }));
         } finally {
             setIsSyncing(false);
         }
@@ -203,46 +212,58 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
-                        Device Sync
+                        {t('sync.title')}
                     </h2>
                     <button
                         onClick={onClose}
                         className="p-1.5 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex-shrink-0"
-                        aria-label="Close"
+                        aria-label={t('common.close')}
                     >
                         <X className="w-5 h-5" />
                     </button>
                 </div>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{status}</p>
+                {status && <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{status}</p>}
 
                 <div className="mb-4 p-3 rounded border dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                        <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Pairing Code (shared with peers)</span>
+                    <div className="flex items-center justify-between gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setCodeOpen(o => !o)}
+                            className="flex items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+                            aria-expanded={codeOpen}
+                        >
+                            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${codeOpen ? '' : '-rotate-90'}`} />
+                            {t('sync.pairing_code_label')}
+                        </button>
                         <button
                             onClick={copySyncToken}
                             className="text-xs px-2 py-1 rounded border dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
                         >
-                            Copy
+                            {t('sync.copy')}
                         </button>
                     </div>
-                    <div className="flex gap-2">
-                        <input
-                            type="text"
-                            value={tokenInput}
-                            onChange={(e) => setTokenInput(e.target.value)}
-                            placeholder="e.g. MT-4821"
-                            className="flex-1 px-3 py-1.5 text-sm rounded border dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 outline-none"
-                        />
-                        <button
-                            onClick={saveSyncToken}
-                            className="px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
-                        >
-                            Save
-                        </button>
-                    </div>
-                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                        Both devices must use the same code. Copy it from this device and paste it on the peer, or set a code you both agree on.
-                    </p>
+                    {codeOpen && (
+                        <>
+                            <div className="flex gap-2 mt-2">
+                                <input
+                                    type="text"
+                                    value={tokenInput}
+                                    onChange={(e) => setTokenInput(e.target.value)}
+                                    placeholder={t('sync.pairing_code_placeholder')}
+                                    className="flex-1 px-3 py-1.5 text-sm rounded border dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 outline-none"
+                                />
+                                <button
+                                    onClick={saveSyncToken}
+                                    className="px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+                                >
+                                    {t('sync.save')}
+                                </button>
+                            </div>
+                            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                {t('sync.pairing_code_desc')}
+                            </p>
+                        </>
+                    )}
                 </div>
 
                 {/* Quick pairing: one-time code rendered as a QR (plus the code
@@ -302,7 +323,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                         className="mt-0.5 w-4 h-4 accent-blue-600"
                     />
                     <span className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
-                        Also sync app config — AI keys, distilled characters and chats (encrypted with the pairing code). Peer settings overwrite yours; both devices must use the same pairing code.
+                        {t('sync.include_config')}
                     </span>
                 </label>
                 
@@ -310,7 +331,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                     {peers.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-gray-400">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-400 mb-2"></div>
-                            <span className="text-xs">Looking for devices on LAN...</span>
+                            <span className="text-xs">{t('sync.looking_for_peers')}</span>
                         </div>
                     ) : (
                         peers.map((peer) => (
@@ -324,20 +345,11 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                                     disabled={isSyncing}
                                     className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
                                 >
-                                    {isSyncing ? 'Syncing...' : 'Sync'}
+                                    {isSyncing ? t('sync.syncing') : t('sync.sync')}
                                 </button>
                             </div>
                         ))
                     )}
-                </div>
-
-                <div className="flex justify-end">
-                    <button 
-                        onClick={onClose} 
-                        className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                    >
-                        Close
-                    </button>
                 </div>
             </div>
         </div>

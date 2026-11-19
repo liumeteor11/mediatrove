@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw, Info } from 'lucide-react';
 import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
-import { detectQueryLang } from '../services/tmdbService';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
 import { MediaCard } from '../components/MediaCard';
 import { useCollectionStore } from '../store/useCollectionStore';
@@ -49,13 +48,9 @@ export const SearchPage: React.FC = () => {
   const { addToCollection } = useCollectionStore();
   
   // Refs to access latest state in async functions without dependencies
-  const isTrendingRef = useRef(isTrending);
-  const queryRef = useRef(query);
   const selectedTypeRef = useRef<MediaType | 'All'>(selectedType);
   const searchLoadingOpRef = useRef<string | null>(null);
 
-  useEffect(() => { isTrendingRef.current = isTrending; }, [isTrending]);
-  useEffect(() => { queryRef.current = query; }, [query]);
   useEffect(() => { selectedTypeRef.current = selectedType; }, [selectedType]);
 
   const startOp = () => {
@@ -135,31 +130,9 @@ export const SearchPage: React.FC = () => {
             useSearchStore.getState().setIsTrending(false);
         }
     };
-    window.addEventListener('reset-search', handleReset);
-    return () => window.removeEventListener('reset-search', handleReset);
+  window.addEventListener('reset-search', handleReset);
+  return () => window.removeEventListener('reset-search', handleReset);
   }, []);
-
-  const getSearchCacheKeys = (q: string) => {
-    // Cache buckets follow the query language (same rule as searchMedia's
-    // v2 cache), not the UI language.
-    const langKey = detectQueryLang(q);
-    const types: Array<MediaType | 'All'> = ['All', MediaType.MOVIE, MediaType.TV_SERIES, MediaType.BOOK, MediaType.COMIC, MediaType.SHORT_DRAMA, MediaType.MUSIC];
-    return types.map(t => ({
-      type: t,
-      key: `media_tracker_search_${langKey}_${t}_${q.trim().toLowerCase()}`,
-      tsKey: `media_tracker_search_${langKey}_${t}_${q.trim().toLowerCase()}_ts`
-    }));
-  };
-
-  const writeSearchCache = (q: string, type: MediaType | 'All', items: MediaItem[]) => {
-    try {
-      const langKey = detectQueryLang(q);
-      const key = `media_tracker_search_${langKey}_${type}_${q.trim().toLowerCase()}`;
-      const tsKey = `${key}_ts`;
-      localStorage.setItem(key, JSON.stringify(items));
-      localStorage.setItem(tsKey, Date.now().toString());
-    } catch {}
-  };
 
   const filters = useMemo(() => [
     { label: t('search_page.filter_all'), value: 'All' },
@@ -311,7 +284,6 @@ export const SearchPage: React.FC = () => {
       const duration = Math.round(performance.now() - startTs);
       const sorted = sortByNewestFirst(data, q);
       setResults(sorted);
-      writeSearchCache(q, selectedType, sorted);
       useAIStore.getState().setConfig({ lastSearchDurationMs: duration, lastSearchAt: new Date().toISOString(), lastSearchQuery: q });
       
       const verifiedData = await verifyResults(sorted, q, opId);
@@ -422,7 +394,6 @@ export const SearchPage: React.FC = () => {
         if (!isOpActive(opId)) return prev;
         return sorted;
       });
-      try { writeSearchCache(q, selectedType, sorted); } catch {}
       return sorted;
     } catch {
         return undefined;
@@ -485,11 +456,6 @@ export const SearchPage: React.FC = () => {
         if (currentInState && currentInState.title !== expectedTitle) return prev; // Title mismatch in state
         
         const mapped = prev.map(r => r.id === id ? { ...r, ...patch } : r);
-        try {
-          if (!isTrendingRef.current && queryRef.current.trim()) {
-            writeSearchCache(queryRef.current, selectedTypeRef.current, mapped);
-          }
-        } catch {}
         if (persistTrending) persist(mapped);
         return mapped;
       });

@@ -250,9 +250,9 @@
     "delete": "删除",
     "test": "测试",
     "no_domains": "暂无域名",
-    "clear_cache": "清除缓存",
-    "cache_cleared": "缓存已清除",
-    "cache_clear_failed": "清除缓存失败"
+    "clear_cache": "清除搜索缓存",
+    "cache_cleared": "搜索缓存已清除",
+    "cache_clear_failed": "清除搜索缓存失败"
   },
   "search_page": {
     "title": "发现你的下一部必看作品",
@@ -702,12 +702,37 @@
     "connect_hint": "连接后，AI 助手即可列出、搜索、添加、修改和删除你的收藏条目。"
   },
   "sync": {
+    "code_copied": "配对码已复制",
+    "code_save_failed": "配对码保存失败：{{error}}",
+    "code_saved": "配对码已保存",
+    "code_too_short": "配对码至少需要 4 个字符",
+    "copy": "复制",
+    "copy_failed": "复制失败，请手动选择代码进行复制",
+    "include_config": "同时同步应用配置——AI 密钥、提炼的角色与聊天记录（使用配对码加密）。对端设置会覆盖你的设置；两台设备必须使用相同配对码。",
+    "looking_for_peers": "正在查找局域网内的设备...",
+    "pair_info_copied": "配对信息已复制",
+    "pairing_code_desc": "两台设备必须使用相同配对码。可复制本机配对码粘贴到对端设备，或双方约定一个配对码。",
+    "pairing_code_label": "配对码（与对端设备共享）",
+    "pairing_code_placeholder": "例如 MT-4821",
+    "qr_generate_failed": "生成配对二维码失败：{{error}}",
+    "qr_ready": "二维码已生成，请在手机登录页扫码",
     "quick_pair_title": "快速配对",
     "quick_pair_generate": "生成配对二维码",
     "quick_pair_expires_in": "{{seconds}} 秒后过期",
     "quick_pair_expired": "已过期，请重新生成",
     "quick_pair_copy": "复制配对信息",
     "quick_pair_refresh": "重新生成",
-    "quick_pair_desc": "在手机登录页选择「扫码快速登录」扫描本二维码，或在手动配对中输入 6 位动态码。有效期 5 分钟，两台设备需在同一局域网。"
+    "quick_pair_desc": "在手机登录页选择「扫码快速登录」扫描本二维码，或在手动配对中输入 6 位动态码。有效期 5 分钟，两台设备需在同一局域网。",
+    "save": "保存",
+    "status_start_error": "启动服务出错：{{error}}",
+    "status_starting": "正在启动同步服务...",
+    "sync": "同步",
+    "sync_completed": "同步完成！",
+    "sync_failed": "同步失败：{{error}}",
+    "sync_failed_auth": "同步失败：配对码不一致。请在两台设备上设置相同的配对码。",
+    "sync_failed_decrypt": "同步失败：无法解密对端的配置文件。两台设备必须使用相同配对码。",
+    "syncing": "同步中...",
+    "syncing_with": "正在与 {{name}} 同步...",
+    "title": "设备同步"
   }
 }

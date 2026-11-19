@@ -1473,40 +1473,6 @@ export const testAuthoritativeDomain = async (domain: string, sampleQuery: strin
     }
 };
 
-export const runBackgroundSearch = async (query: string, type?: MediaType | 'All'): Promise<void> => {
-    const q = (query || '').trim();
-    if (!q) return;
-    const t: MediaType | 'All' = type || 'All';
-    const start = performance.now();
-    try {
-        const items = await searchMedia(q, t);
-        const enriched = [] as MediaItem[];
-        for (const it of items) {
-            try {
-                const year = it.releaseDate ? it.releaseDate.split('-')[0] : '';
-                const { picked } = await fetchPosterFromSearch(it.title, year, it.type);
-                if (picked && (!it.customPosterUrl)) {
-                    enriched.push({ ...it, posterUrl: picked });
-                } else {
-                    enriched.push(it);
-                }
-            } catch (e) {
-                console.warn("Poster enrichment failed", e);
-                enriched.push(it);
-            }
-        }
-        try {
-            const langKey = detectQueryLang(q);
-            const key = `media_tracker_search_${langKey}_${t}_${q.toLowerCase()}`;
-            const tsKey = `${key}_ts`;
-            localStorage.setItem(key, JSON.stringify(enriched));
-            localStorage.setItem(tsKey, Date.now().toString());
-        } catch (e) { console.warn("Cache write failed", e); }
-        const duration = Math.round(performance.now() - start);
-        useAIStore.getState().setConfig({ lastSearchDurationMs: duration, lastSearchAt: new Date().toISOString(), lastSearchQuery: q });
-    } catch (e) { console.error("Background search failed", e); }
-};
-
 export const refreshTrendingCache = async (): Promise<void> => {
     try {
         const trending = await getTrendingMedia();
