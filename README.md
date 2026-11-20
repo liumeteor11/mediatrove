@@ -4,7 +4,9 @@
 
 # MediaTrove
 
-**A cross-platform media companion for Windows, macOS, Linux and Android** — search, collect, and track your media journey (Movies, TV Series, Books, Comics, Short Dramas, Music).
+**One home for everything you watch, read, and listen to.**
+
+Search, collect, and track Movies, TV Series, Books, Comics, Short Dramas and Music — on **Windows, macOS, Linux and Android**.
 
 ![Release](https://img.shields.io/github/v/release/liumeteor11/mediatrove?include_prereleases&label=version)
 ![License](https://img.shields.io/github/license/liumeteor11/mediatrove)
@@ -12,104 +14,110 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-📥 **[Download the latest build](https://github.com/liumeteor11/mediatrove/releases)**
+[📥 **Download the latest build**](https://github.com/liumeteor11/mediatrove/releases) · [✨ Features](#-features) · [🚀 Quick start](#-quick-start) · [🔒 Privacy](#-privacy--security)
 
 </div>
 
-Built with **React + Vite** (Frontend) and **Tauri 2 / Rust** (Backend). Designed for speed, privacy, and an excellent user experience.
+---
 
-## ✨ Key Features
+MediaTrove keeps your whole media journey in one local, private collection — and uses AI to make filling it almost effortless. Describe what you're looking for in plain language, get posters and metadata automatically, and follow your ongoing series as new episodes and chapters drop.
 
-### 🔍 AI-Powered Search & Discovery
-- **Smart Search**: Find movies, books, and more using natural language queries (e.g., "Cyberpunk novels from the 90s"). Results are aggregated from TMDB, Bangumi, plugins and AI, ranked by relevance so fuzzy matches never bury the real work.
-- **Trending Recommendations**: Fresh hot recommendations in three modes — time-based trending, taste-based (learned from your collection), or fully custom via your own prompt. Each round automatically avoids repeating recently shown items.
-- **Consistent Language**: Search results, recommendations, and poster/metadata enrichment all follow the app's UI language (Chinese or English) end to end.
-- **Fast First-Screen**: Instant results return from AI context, followed by asynchronous metadata enrichment.
+Your data stays **on your device**. Nothing is tracked, nothing is uploaded.
 
-### 📚 Comprehensive Collection Management
-- **Multi-Type Support**: Manage Movies, TV Series, Books, Comics, Short Dramas, and Music albums in one place.
-- **Status Tracking**: Organize items into "To Watch", "Watched", and "Favorites".
-- **Ongoing Updates**: Track ongoing series with automatic update checks for new episodes/chapters — TV series use authoritative TMDB episode data, other types fall back to AI with web-search context when available.
+## ✨ Features
 
-### 📱 Device Sync & MCP Integration
-- **LAN Sync**: Sync your collection between devices on the same network — nearby devices are discovered automatically via mDNS.
-- **Built-in MCP Server**: The app exposes a local [Model Context Protocol](https://modelcontextprotocol.io) endpoint (`list_items`, `add_item`, `update_item`, `remove_item`, `get_stats`, …), so MCP-capable AI clients and agents can browse and manage your collection with your permission.
+### 🔍 Search in plain language, powered by AI
 
-### 🎭 Character Distillation & Roleplay Chat
-- **Distill Characters**: Turn characters from your collection (or any work by title) into structured persona profiles — personality traits, mental models, decision heuristics, boundaries, timeline and "expression DNA".
-- **In-Character Chat**: Roleplay conversations that stay in character at all times, with streaming replies and per-character session history.
-- **Persona Tuning**: Teach characters with corrections (scene → what not to do → what to do instead); they take effect from the next reply, override the distilled persona, and can be deleted again from the profile.
-- **Incremental Re-distillation**: Re-distilling the same work merges new details into existing profiles, keeps your corrections, and bumps the profile version.
-- **Background Distillation**: Distilling runs in the background — the dialog closes immediately, a progress badge tracks the run in the corner, and the finished profile appears on the page by itself.
-- **Search-Grounded Research**: Distillation researches the work and the character with the AI's web-search tool before writing the profile; your extra material, the work metadata and TMDb credits still take priority over search results.
+Describe what you feel like — *"90s cyberpunk novels"* or *"movies like Interstellar, but newer"* — and MediaTrove aggregates results from TMDB, Bangumi, plugins and AI, ranked so the right match is never buried under fuzzy ones. Trending recommendations come in three flavors (time-based, learned from your collection, or your own custom prompt), and every round automatically avoids repeating what you've already been shown. Everything follows your interface language end to end.
 
-### 🛠️ Advanced Editing & Customization
-- **Manual Entry**: Create custom media cards directly without searching.
-- **Metadata Editing**: Full control over title, director, description, release date, and cast.
-- **Custom Posters**: Upload your own cover images or let the app auto-fetch high-quality posters from the web.
+<p align="center">
+  <img src="docs/screenshots/search-trending.png" width="820" alt="AI search and trending recommendations" />
+</p>
 
-### 📊 Insights & Analytics
-- **Yearly Report**: Visualize your activity with annual statistics, including total items added, most active month, and favorite categories.
-- **Search Diagnostics**: View detailed I/O logs of AI interactions and search provider performance (token usage, latency, per-call duration).
+### 📚 One collection for six kinds of media
 
-### 🤖 Flexible AI Integration
-- **Bring Your Own AI**: Works with Moonshot/Kimi, OpenAI, DeepSeek, Qwen, Google, Mistral, MiMo, Zhipu (GLM), or any OpenAI-compatible custom endpoint.
-- **Per-Model Adaptation**: Model quirks are handled automatically — models that fix the sampling temperature, reject the parameter or tool calling, or spend their whole output budget on reasoning are detected from the provider's own response and adapted (re-tested per session, so unknown/new models work too).
-- **Optional Search Providers**: Plug in Vertex AI Search, Serper, Yandex, or DeepSeek Search keys to sharpen update tracking, trending freshness and search context. A keyless built-in DuckDuckGo engine works out of the box, and AI-native web search is used automatically when the provider supports it.
+Movies, TV series, books, comics, short dramas and music albums live side by side, organized into **To Watch**, **Watched** and **Favorites** — with pinning, drag-and-drop ordering, custom collection folders, and one-click metadata refresh. Ongoing series track themselves: new episodes and chapters are checked automatically (TV series use authoritative TMDB episode data), and the update lands at the top of your grid with a badge.
 
-## 🚀 Technical Highlights
+<p align="center">
+  <img src="docs/screenshots/collection.png" width="820" alt="Collection grid" />
+</p>
 
-- **Privacy First**: API keys are stored locally with **AES encryption**. Collection data never leaves your devices (except optional LAN sync within your own network).
-- **Cross-Platform**: One codebase ships desktop installers (Windows / macOS / Linux) and an Android APK from the same Tauri 2 core.
-- **Offline Friendly**: Works gracefully with intermittent internet; caches metadata locally for instant loading.
-- **Async Hydration**: Posters and detailed info are fetched in the background to keep the UI responsive.
-- **Internationalization**: Full support for English and Chinese (Simplified), with auto-detection.
+### 🧾 Rich details, and notes that render as you write
 
-## 🛠️ Quick Start
+Every card opens into a full detail view with poster, cast, ratings and progress. Write per-item notes in Markdown with a **live split preview** — the rendered note updates on every keystroke, like Obsidian's live preview. Fully editable metadata means manually-added items and self-curated entries look just as good as the fetched ones.
 
-### Prerequisites
-- Node.js (v18+)
-- Rust (latest stable)
-- For Android builds: Android SDK + NDK (see [Tauri docs](https://v2.tauri.app/start/prerequisites/))
+<p align="center">
+  <img src="docs/screenshots/item-detail.png" width="400" alt="Item detail view" />
+  &nbsp;
+  <img src="docs/screenshots/notes-live-preview.png" width="400" alt="Markdown notes with live preview" />
+</p>
 
-### Development
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-2. **Run desktop app**:
-   ```bash
-   npm run tauri dev
-   ```
-3. **Run web-only mode**:
-   ```bash
-   npm run dev
-   ```
-4. **Run on Android** (first time needs `npm run tauri android init`):
-   ```bash
-   npm run tauri android dev
-   ```
-5. **Run Rust unit tests**:
-   ```bash
-   cd src-tauri && cargo test
-   ```
+### 📊 Insights & yearly reports
 
-### Build
-To build the application for your OS:
+See your year at a glance — items added per month, your peak month, favorite categories — plus search diagnostics (token usage, latency, per-provider performance) when you want to fine-tune the AI plumbing.
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" width="820" alt="Dashboard with annual report" />
+</p>
+
+### 🎭 Distill characters, then talk to them
+
+Turn any character from your collection into a structured persona — personality, mental models, decision heuristics, boundaries, timeline, "expression DNA" — grounded by AI web research. Then chat with them in character: streaming replies, per-character session history, and a correction layer (*scene → what not to do → what to do instead*) that takes effect from the very next reply. Re-distilling a work merges new details into the existing persona and keeps your corrections.
+
+<p align="center">
+  <img src="docs/screenshots/characters.png" width="400" alt="Character library" />
+  &nbsp;
+  <img src="docs/screenshots/character-chat.png" width="400" alt="In-character chat" />
+</p>
+
+### 🤖 Bring your own AI
+
+Works out of the box with Moonshot/Kimi, OpenAI, DeepSeek, Qwen, Google, Mistral, MiMo, Zhipu (GLM) — or any OpenAI-compatible endpoint. Model quirks (fixed temperature, rejected tool calls, reasoning-budget hogs) are detected and adapted automatically, so unreleased models work too. Optional search keys (Vertex AI Search, Serper, Yandex, DeepSeek Search) sharpen freshness and accuracy; a keyless built-in DuckDuckGo engine is always available as a fallback.
+
+### 📱 Sync between your devices, and let AI agents help
+
+- **LAN sync** — discover nearby devices automatically over mDNS and sync your collection within your own network.
+- **Built-in MCP server** — MCP-capable AI clients can browse and manage your collection with your permission (`list_items`, `add_item`, `update_item`, `remove_item`, `get_stats`, …).
+
+### 🌍 Thoughtful touches
+
+English & 简体中文 with auto-detection · three themes · offline-friendly caching · custom posters or auto-fetched ones · import/export your collection as JSON.
+
+## 📥 Download
+
+Grab the latest installer for your platform from [**Releases**](https://github.com/liumeteor11/mediatrove/releases): Windows (NSIS/MSI), macOS, Linux (AppImage/deb), and Android (APK). Releases are built and published automatically for every `v*` tag.
+
+<p align="center">
+  <img src="docs/screenshots/mobile-collection.png" width="300" alt="MediaTrove on a phone-sized screen" />
+</p>
+
+## 🚀 Quick start
+
+MediaTrove is a local app — no account, no server. Install it, open **Dashboard → AI Configuration**, paste an API key from your favorite AI provider (stored **AES-encrypted** on your device), and start searching. Everything else — TMDB, Bangumi, DuckDuckGo — works without any keys.
+
+<details>
+<summary><strong>Building from source (developers)</strong></summary>
+
+Prerequisites: Node.js 18+, Rust (latest stable); for Android builds see the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+
 ```bash
-npm run tauri build
+npm install                 # install dependencies
+npm run tauri dev           # run the desktop app in development
+npm run dev                 # run the web-only preview in a browser
+npm run tauri android dev   # run on Android (first: npm run tauri android init)
+cd src-tauri && cargo test  # Rust unit tests
+npm run tauri build         # build installers for your OS
 ```
 
-## 📦 GitHub Actions Release
+Releases are produced by GitHub Actions: push a `v*` tag (e.g. `v0.1.45`) or trigger the workflow manually to build all platform artifacts as a draft release. Android APK signing reads `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_STORE_PASSWORD` and `ANDROID_KEY_PASSWORD` from repository secrets, falling back to an unsigned APK.
 
-Push a tag starting with `v` (e.g., `v0.1.30`) — or trigger the workflow manually — to build Windows, macOS, Linux installers and an Android APK, published to GitHub Releases as a draft.
-
-Android APK signing is picked up automatically from repository secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_STORE_PASSWORD`, `ANDROID_KEY_PASSWORD`); without them the workflow falls back to an unsigned APK.
+</details>
 
 ## 🔒 Privacy & Security
-- **Local Storage**: All collection data is stored locally on your device.
-- **Encrypted Keys**: Sensitive API keys are encrypted before storage.
-- **No Tracking**: We do not track your search history or collection data.
+
+- **Local first** — your collection lives on your device, full stop.
+- **Encrypted keys** — API keys are AES-encrypted before storage.
+- **No tracking** — no analytics, no search-history collection, no uploads. LAN sync stays inside your network.
 
 ## 📄 License
 
@@ -118,3 +126,7 @@ Licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (AGPL-
 **Need to ship it closed-source or offer it as a paid service?** A separate [commercial license](COMMERCIAL.md) is available: open an issue on the repository to request one.
 
 Third-party dependencies keep their own licenses (mostly MIT / Apache-2.0).
+
+---
+
+<sup>Screenshots show demo data in the web preview build. MediaTrove is not affiliated with TMDB or Bangumi; metadata is provided by their public APIs.</sup>

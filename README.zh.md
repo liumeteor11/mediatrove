@@ -4,7 +4,9 @@
 
 # MediaTrove
 
-**一款覆盖 Windows、macOS、Linux 和 Android 的跨平台媒体追踪与收藏应用**，支持电影、电视剧、书籍、漫画、短剧和音乐。
+**你看过、读过、听过的每一样东西，都有一个共同的家。**
+
+在 **Windows、macOS、Linux 和 Android** 上搜索、收藏、追踪电影、电视剧、书籍、漫画、短剧和音乐。
 
 ![版本](https://img.shields.io/github/v/release/liumeteor11/mediatrove?include_prereleases&label=version)
 ![许可](https://img.shields.io/github/license/liumeteor11/mediatrove)
@@ -12,104 +14,110 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-📥 **[下载最新版本](https://github.com/liumeteor11/mediatrove/releases)**
+[📥 **下载最新版本**](https://github.com/liumeteor11/mediatrove/releases) · [✨ 功能](#-主要功能) · [🚀 快速上手](#-快速上手) · [🔒 隐私](#-隐私与安全)
 
 </div>
 
-基于 **React + Vite**（前端）和 **Tauri 2 / Rust**（后端）构建。专为速度、隐私和极致用户体验而设计。
+---
+
+MediaTrove 把你的整个媒体旅程收进一个本地、私密的收藏库，并用 AI 让"填满它"变得毫不费力：用一句自然语言描述你想找的东西，海报和元数据自动补全；连载中的剧集和漫画自动追更。
+
+数据始终留在**你自己的设备上**——不追踪、不上传。
 
 ## ✨ 主要功能
 
-### 🔍 AI 驱动的搜索与发现
-- **智能搜索**：使用自然语言查找作品（例如："90年代的赛博朋克小说"）。结果聚合 TMDB、Bangumi、插件与 AI 多源数据，按相关性评分排序，模糊匹配不会淹没精确结果。
-- **热门推荐**：三种推荐模式——时间热门、收藏喜好（从你的收藏中学习口味）、自定义提示词；每轮自动排除最近展示过的内容。
-- **语言一致**：搜索结果、推荐内容与海报/元数据补全都跟随应用界面语言（中文或英文），端到端保持统一。
-- **首屏秒开**：AI 上下文快速返回初步结果，元数据异步加载补全，无需等待。
+### 🔍 用自然语言搜索，AI 驱动
 
-### 📚 全面的收藏管理
-- **多类型支持**：统一管理电影、电视剧、书籍、漫画、短剧和音乐专辑。
-- **状态追踪**：将条目分类为"待看"、"看过"和"最爱"。
-- **追更模式**：连载中的作品（电视剧、动漫、漫画）自动检查最新剧集/章节——电视剧优先使用 TMDB 权威数据，其余由 AI 结合联网搜索（可选）判断，并带有防编造约束。
+直接描述你的口味——"90 年代的赛博朋克小说"、"和《星际穿越》类似但更新的电影"——MediaTrove 聚合 TMDB、Bangumi、插件与 AI 多源结果，按相关性排序，模糊匹配不会淹没精确结果。热门推荐有三种模式（时间热门、从你的收藏学习口味、自定义提示词），每轮自动排除最近展示过的内容。搜索、推荐与元数据补全全程跟随界面语言。
 
-### 📱 设备同步与 MCP 集成
-- **局域网同步**：在同一网络内的设备之间同步收藏，通过 mDNS 自动发现附近设备。
-- **内置 MCP 服务器**：应用在本地暴露 [Model Context Protocol](https://modelcontextprotocol.io) 端点（`list_items`、`add_item`、`update_item`、`remove_item`、`get_stats` 等），支持 MCP 的 AI 客户端与智能体可在你授权的前提下浏览和管理收藏。
+<p align="center">
+  <img src="docs/screenshots/search-trending.png" width="820" alt="AI 搜索与热门推荐" />
+</p>
 
-### 🎭 人物蒸馏与角色对话
-- **人物蒸馏**：把收藏作品（或任意手填作品名）中的角色蒸馏成结构化角色画像——性格特质、心智模型、决策模式、边界雷区、生平轨迹与"表达 DNA"。
-- **角色扮演对话**：全程保持角色的沉浸式对话，回复默认流式输出，每个角色独立的会话历史。
-- **人设调校**：通过"纠偏"（场景 → 不应该 → 应该）调教角色，下一条回复立即生效、优先于蒸馏出的人设，并可在档案中随时删除。
-- **增量重蒸馏**：对同一作品重复蒸馏会增量合并画像、保留人工纠偏，并递增档案版本号。
-- **后台蒸馏**：蒸馏在后台进行——点击后弹窗立即关闭，右下角显示进度提示，画像生成后自动出现在页面上。
-- **联网检索**：蒸馏前先用 AI 的联网搜索工具检索作品与目标角色再落笔；你补充的素材、作品元数据与 TMDb 演职员表仍优先于检索结果。
+### 📚 六类媒体，一个收藏库
 
-### 🛠️ 高级编辑与自定义
-- **手动添加**：无需搜索，直接创建自定义媒体卡片。
-- **元数据编辑**：完全控制标题、导演/作者、简介、上映日期和演职人员信息。
-- **自定义海报**：上传本地图片作为封面，或让应用自动从网络抓取高质量海报。
+电影、电视剧、书籍、漫画、短剧、音乐专辑并列呈现，归入**待看 / 看过 / 最爱**，支持置顶、拖拽排序、收藏夹分组和一键刷新元数据。连载作品自动追更：电视剧使用 TMDB 权威剧集数据，漫画/AI 类自动检查最新章节，更新后带着角标浮到收藏顶部。
 
-### 📊 数据洞察与统计
-- **年度报告**：可视化展示您的年度观影/阅读活动，包括添加总数、最活跃月份和最爱类别。
-- **搜索诊断**：查看 AI 交互与搜索源的详细 I/O 日志（Token 消耗、延迟、单次调用耗时），方便调试与优化。
+<p align="center">
+  <img src="docs/screenshots/collection.png" width="820" alt="收藏网格" />
+</p>
 
-### 🤖 灵活的 AI 接入
-- **自带 AI**：支持 Moonshot/Kimi、OpenAI、DeepSeek、Qwen、Google、Mistral、MiMo、智谱 GLM，以及任意 OpenAI 兼容自定义端点。
-- **按模型自适应**：模型差异自动兜底——只接受固定温度、直接拒绝 temperature 或工具调用、把输出额度全用在思考上的模型，都会根据服务商返回的报错自动适配（每个会话重新探测，因此未收录或新发布的模型同样可用）。
-- **可选搜索源**：可配置 Vertex AI Search、Serper、Yandex 或 DeepSeek Search 的 Key，让追更核对、热门推荐时效与搜索上下文更精准；内置免 Key 的 DuckDuckGo 开箱即用，模型厂商提供原生联网搜索时自动优先使用。
+### 🧾 详情丰富，笔记边写边渲染
 
-## 🚀 技术亮点
+每张卡片点开就是完整详情：海报、演职人员、评分、进度。支持 **Markdown 分栏实时预览**写笔记——右侧渲染结果随输入逐键更新，类似 Obsidian 的实时预览。元数据完全可编辑，手动添加的条目也能和抓取的一样精美。
 
-- **隐私优先**：API Key 使用 **AES 加密** 存储在本地。收藏数据不会离开你的设备（局域网同步也仅在你的网络内进行）。
-- **跨平台**：同一套 Tauri 2 内核同时产出桌面安装包（Windows / macOS / Linux）与 Android APK。
-- **离线友好**：支持断网查看已缓存的元数据和图片。
-- **异步水合**：海报和详细信息在后台静默加载，保持界面流畅不卡顿。
-- **国际化**：完整支持简体中文和英文，界面语言自动适配或手动切换。
+<p align="center">
+  <img src="docs/screenshots/item-detail.png" width="400" alt="条目详情视图" />
+  &nbsp;
+  <img src="docs/screenshots/notes-live-preview.png" width="400" alt="Markdown 笔记实时预览" />
+</p>
 
-## 🛠️ 快速开始
+### 📊 数据洞察与年度报告
 
-### 前置要求
-- Node.js (v18+)
-- Rust (最新稳定版)
-- Android 构建另需 Android SDK + NDK（见 [Tauri 文档](https://v2.tauri.app/start/prerequisites/)）
+一眼看清这一年：每月新增、最活跃月份、最爱类别；还有搜索诊断（Token 消耗、延迟、各搜索源表现），想调优 AI 配置时随时可查。
 
-### 开发
-1. **安装依赖**:
-   ```bash
-   npm install
-   ```
-2. **启动桌面应用**:
-   ```bash
-   npm run tauri dev
-   ```
-3. **仅启动前端网页**:
-   ```bash
-   npm run dev
-   ```
-4. **运行 Android 版**（首次需先 `npm run tauri android init`）:
-   ```bash
-   npm run tauri android dev
-   ```
-5. **运行 Rust 单元测试**:
-   ```bash
-   cd src-tauri && cargo test
-   ```
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" width="820" alt="仪表盘与年度报告" />
+</p>
 
-### 构建
-为当前操作系统构建应用程序：
+### 🎭 蒸馏角色，然后和他们对话
+
+把收藏作品里的任意角色蒸馏成结构化画像——性格特质、心智模型、决策模式、边界雷区、生平轨迹、"表达 DNA"——落笔前由 AI 联网检索作品资料。之后即可进行沉浸式角色扮演对话：流式回复、每个角色独立的会话历史，还有"纠偏层"（场景 → 不应该 → 应该），下一条回复立即生效。对同一作品重复蒸馏会增量合并画像并保留你的纠偏。
+
+<p align="center">
+  <img src="docs/screenshots/characters.png" width="400" alt="角色档案库" />
+  &nbsp;
+  <img src="docs/screenshots/character-chat.png" width="400" alt="角色对话" />
+</p>
+
+### 🤖 自带 AI，随时可换
+
+开箱支持 Moonshot/Kimi、OpenAI、DeepSeek、Qwen、Google、Mistral、MiMo、智谱 GLM，以及任意 OpenAI 兼容端点。模型差异（固定温度、拒绝工具调用、思考挤占输出额度）自动探测并适配，新发布的模型也能直接用。可选配置 Vertex AI Search、Serper、Yandex、DeepSeek Search 提升时效与准确性；内置免 Key 的 DuckDuckGo 永远兜底。
+
+### 📱 设备间同步，还能让 AI 智能体帮你管理
+
+- **局域网同步** —— 通过 mDNS 自动发现附近设备，在你的网络内同步收藏。
+- **内置 MCP 服务器** —— 支持 MCP 的 AI 客户端经你授权后可直接浏览与管理收藏（`list_items`、`add_item`、`update_item`、`remove_item`、`get_stats` 等）。
+
+### 🌍 贴心细节
+
+英文 / 简体中文自动适配 · 三套主题 · 离线缓存 · 自定义海报或自动抓取 · 收藏可导入导出 JSON。
+
+## 📥 下载
+
+前往 [**Releases**](https://github.com/liumeteor11/mediatrove/releases) 获取最新安装包：Windows（NSIS/MSI）、macOS、Linux（AppImage/deb）与 Android（APK）。每次推送 `v*` 标签都会自动构建发布。
+
+<p align="center">
+  <img src="docs/screenshots/mobile-collection.png" width="300" alt="手机尺寸屏幕上的 MediaTrove" />
+</p>
+
+## 🚀 快速上手
+
+MediaTrove 是本地应用——无需注册、没有服务器。安装后打开**仪表盘 → AI 配置**，粘贴一个你常用 AI 服务商的 API Key（以 **AES 加密**存储在本机），即可开始搜索。其余一切——TMDB、Bangumi、DuckDuckGo——无需任何 Key。
+
+<details>
+<summary><strong>从源码构建（开发者）</strong></summary>
+
+前置要求：Node.js 18+、Rust（最新稳定版）；Android 构建见 [Tauri 前置要求](https://v2.tauri.app/start/prerequisites/)。
+
 ```bash
-npm run tauri build
+npm install                 # 安装依赖
+npm run tauri dev           # 桌面应用开发模式
+npm run dev                 # 仅前端网页预览
+npm run tauri android dev   # Android 运行（首次先: npm run tauri android init）
+cd src-tauri && cargo test  # Rust 单元测试
+npm run tauri build         # 构建当前系统安装包
 ```
 
-## 📦 GitHub Actions 发布
+发布由 GitHub Actions 自动完成：推送 `v*` 标签（如 `v0.1.45`）或手动触发工作流，即可构建全平台产物并发布草稿。Android APK 签名自动读取仓库 Secrets（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEY_ALIAS`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_PASSWORD`），未配置时回退为未签名 APK。
 
-推送以 `v` 开头的标签（如 `v0.1.30`），或在 Actions 页手动触发，即可构建 Windows、macOS、Linux 安装包与 Android APK，并发布到 Releases 草稿。
-
-Android APK 签名自动读取仓库 Secrets（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEY_ALIAS`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_PASSWORD`）；未配置时回退为未签名 APK。
+</details>
 
 ## 🔒 隐私与安全
-- **本地存储**：所有收藏数据仅存储在您的设备上。
-- **密钥加密**：敏感的 API Key 在存储前均经过加密处理。
-- **无追踪**：我们不收集您的搜索历史或收藏数据。
+
+- **本地优先** —— 收藏数据只存在你的设备上。
+- **密钥加密** —— API Key 存储前均经 AES 加密。
+- **无追踪** —— 无统计埋点、不收集搜索历史、不上传数据；局域网同步不出你的网络。
 
 ## 📄 许可
 
@@ -118,3 +126,7 @@ Android APK 签名自动读取仓库 Secrets（`ANDROID_KEYSTORE_BASE64`、`ANDR
 **需要闭源分发或作为付费服务提供？** 可申请单独的[商业授权](COMMERCIAL.md)：在仓库提 issue 即可。
 
 第三方依赖仍遵循各自的许可（以 MIT / Apache-2.0 为主）。
+
+---
+
+<sup>截图为 Web 预览构建中的演示数据。MediaTrove 与 TMDB、Bangumi 无隶属关系，元数据来自其公开 API。</sup>
