@@ -528,11 +528,11 @@ export const SearchPage: React.FC = () => {
        <div className="absolute top-[-100px] left-1/2 transform -translate-x-1/2 w-[600px] h-[600px] rounded-full blur-[100px] opacity-30 pointer-events-none bg-theme-accent" />
 
       {/* Search Header */}
-      <div className="text-center mb-12 space-y-6 relative z-10">
-        <h1 className="text-3xl md:text-6xl heading-strong text-theme-accent-warm">
+      <div className="text-center mb-6 md:mb-12 space-y-4 md:space-y-6 relative z-10">
+        <h1 className="text-xl md:text-6xl heading-strong text-theme-accent-warm">
           {t('search_page.title')}
         </h1>
-        <p className="text-base md:text-lg max-w-2xl mx-auto text-theme-subtext">
+        <p className="text-sm md:text-lg max-w-2xl mx-auto text-theme-subtext">
           {t('search_page.subtitle')}
         </p>
         
@@ -598,13 +598,13 @@ export const SearchPage: React.FC = () => {
           </div>
         </form>
 
-        <div className="flex flex-wrap md:flex-nowrap justify-center gap-2 mt-6 max-w-4xl mx-auto overflow-x-auto pb-2 no-scrollbar px-4">
+        <div className="flex flex-nowrap justify-start md:justify-center gap-2 mt-4 md:mt-6 max-w-4xl mx-auto overflow-x-auto pb-2 no-scrollbar px-4">
           {filters.map((filter) => (
             <button
               key={filter.value}
               onClick={() => setSelectedType(filter.value as MediaType | 'All')}
               className={clsx(
-                "px-4 py-2 rounded-full text-sm font-medium transition-all duration-300 border focus:outline-none focus:ring-2 focus:ring-theme-accent whitespace-nowrap flex-shrink-0",
+                "px-3 py-1.5 md:px-4 md:py-2 rounded-full text-xs md:text-sm font-medium transition-all duration-300 border focus:outline-none focus:ring-2 focus:ring-theme-accent whitespace-nowrap flex-shrink-0",
                 selectedType === filter.value
                   ? "bg-theme-accent text-theme-bg border-theme-accent border-2 shadow-lg"
                   : "bg-theme-surface text-theme-subtext border-theme-border hover:border-theme-accent/50 hover:text-theme-text"
@@ -627,22 +627,22 @@ export const SearchPage: React.FC = () => {
           </div>
         )
       ) : (
-      <div className="space-y-6">
-        <div className="flex items-center gap-2 mb-6 border-b pb-4 border-theme-border">
+      <div className="space-y-4 md:space-y-6">
+        <div className="flex items-center gap-2 mb-4 md:mb-6 border-b pb-2 md:pb-4 border-theme-border">
             {isTrending ? (
-                <div className="flex items-center justify-between w-full">
-                    <div className="flex items-center gap-2 font-bold text-xl text-theme-accent">
-                        <TrendingUp className="w-6 h-6" />
-                        <h2>{t('search_page.trending_title')}</h2>
-                        <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-theme-accent/10 text-theme-accent border border-theme-accent/30">
+                <div className="flex items-center justify-between w-full gap-1.5">
+                    <div className="flex items-center gap-1.5 md:gap-2 font-bold text-base md:text-xl text-theme-accent min-w-0">
+                        <TrendingUp className="w-5 h-5 md:w-6 md:h-6 flex-shrink-0" />
+                        <h2 className="truncate">{t('search_page.trending_title')}</h2>
+                        <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-theme-accent/10 text-theme-accent border border-theme-accent/30 flex-shrink-0 hidden sm:inline-flex">
                             {t(`ai_config.trending_mode_${trendingMode || 'recent'}`)}
                         </span>
                     </div>
-                    
-                    <div className="flex items-center gap-2">
+
+                    <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
                         <button
                             onClick={openPromptModal}
-                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all bg-theme-surface text-theme-text border-2 border-theme-accent hover:bg-theme-bg focus:outline-none focus:ring-2 focus:ring-theme-accent"
+                            className="flex items-center gap-2 px-2.5 py-1 md:px-3 md:py-1.5 rounded-lg text-xs md:text-sm font-medium transition-all bg-theme-surface text-theme-text border-2 border-theme-accent hover:bg-theme-bg focus:outline-none focus:ring-2 focus:ring-theme-accent"
                             title={t('search_page.edit_prompt')}
                         >
                             <Edit className="w-4 h-4" />
@@ -652,7 +652,7 @@ export const SearchPage: React.FC = () => {
                         <button
                             onClick={() => loadTrending(true)}
                             disabled={trendingLoading}
-                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all bg-theme-surface text-theme-accent hover:bg-theme-bg disabled:opacity-50 border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent"
+                            className="flex items-center gap-1.5 md:gap-2 px-2.5 py-1 md:px-3 md:py-1.5 rounded-lg text-xs md:text-sm font-medium transition-all bg-theme-surface text-theme-accent hover:bg-theme-bg disabled:opacity-50 border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent"
                             title={t('search_page.refresh_tooltip')}
                         >
                             <RefreshCw className={clsx("w-4 h-4", trendingLoading && "animate-spin")} />

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Star, Clock, Calendar, Heart, Check, Bookmark, MoreVertical, Info, Bell, BellOff, RefreshCw, Edit, Trash2, User, Users, ChevronsUp, Tags, Layers, FolderPlus, ChevronDown, ChevronUp } from 'lucide-react';
+import { Star, Clock, Calendar, Heart, Check, Bookmark, MoreVertical, Info, Image as ImageIcon, Bell, BellOff, RefreshCw, Edit, Trash2, User, Users, ChevronsUp, Tags, Layers, FolderPlus, ChevronDown, ChevronUp } from 'lucide-react';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
 import clsx from 'clsx';
 import { useThemeStore } from '../store/useThemeStore';
@@ -79,22 +79,30 @@ interface MediaCardProps {
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onStartCollection?: () => void;
+  /** Start on the back (metadata) face — the detail overlay on mobile does
+   *  this so Edit/actions stay reachable without a hover interaction. */
+  defaultFlipped?: boolean;
+  /** Render an explicit flip toggle on both faces (touch surfaces without
+   *  hover, e.g. the mobile detail overlay). */
+  showFlipToggle?: boolean;
 }
 
-export const MediaCard: React.FC<MediaCardProps> = ({ 
-  item, 
-  onAction, 
-  showActions = true, 
-  index = 0, 
-  layoutId, 
-  onClick, 
+export const MediaCard: React.FC<MediaCardProps> = ({
+  item,
+  onAction,
+  showActions = true,
+  index = 0,
+  layoutId,
+  onClick,
   className,
   variant = 'search',
   isSelectionMode,
   isSelected,
-  onStartCollection
+  onStartCollection,
+  defaultFlipped = false,
+  showFlipToggle = false
 }) => {
-  const [isFlipped, setIsFlipped] = useState(false);
+  const [isFlipped, setIsFlipped] = useState(defaultFlipped);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -458,22 +466,23 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                   </div>
               )}
 
-              {/* Mobile Flip Button */}
-              {isMobile && (
-                 <div className="absolute top-3 left-3 z-20">
-                    <button 
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            setIsFlipped(!isFlipped);
-                        }}
-                        className="bg-black/60 backdrop-blur-md p-2 rounded-full border border-white/10 text-white active:scale-95 transition-transform"
-                        aria-label={t('media_card.flip_card')}
-                    >
-                        <Info className="w-4 h-4" />
-                    </button>
-                 </div>
+              {/* Explicit flip toggle (touch surfaces without hover, e.g. the
+                  mobile detail overlay): flip to the metadata face. */}
+              {showFlipToggle && (
+                <div className="absolute top-2 left-2 z-20">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsFlipped(!isFlipped);
+                    }}
+                    className="bg-black/60 backdrop-blur-md p-1.5 rounded-full border border-white/10 text-white active:scale-95 transition-transform"
+                    aria-label={t('media_card.flip_card')}
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               )}
-              
+
               <img
                 key={imgSrc}
                 ref={imgRef}
@@ -493,7 +502,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
               
               {/* Category Badge */}
               {item.category && (
-                <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md p-1.5 rounded-full border border-white/10">
+                <div className="absolute top-2 right-2 md:top-3 md:right-3 bg-black/60 backdrop-blur-md p-1 md:p-1.5 rounded-full border border-white/10">
                   {getCategoryIcon(item.category)}
                 </div>
               )}
@@ -504,22 +513,22 @@ export const MediaCard: React.FC<MediaCardProps> = ({
               )}
 
               {/* Content Overlay */}
-              <div className="absolute bottom-0 left-0 right-0 p-4 transform transition-transform duration-300 group-hover:translate-y-[-10px]">
+              <div className="absolute bottom-0 left-0 right-0 p-2.5 md:p-4 transform transition-transform duration-300 group-hover:translate-y-[-10px]">
                 {(imgLoading && !imgFailed) && (
                   <p className="text-xs text-yellow-300 mb-1">{t('media_card.image_loading')}</p>
                 )}
                 {imgFailed && (
                   <p className="text-xs text-red-400 mb-1">{t('media_card.image_failed')}</p>
                 )}
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-theme-accent text-theme-bg rounded-sm ring-1 ring-theme-accent/50 shadow-md">
+                <div className="flex items-center gap-2 mb-1 md:mb-2">
+                  <span className="px-1.5 py-0.5 md:px-2 text-[10px] font-bold uppercase tracking-wider bg-theme-accent text-theme-bg rounded-sm ring-1 ring-theme-accent/50 shadow-md">
                     {item.type}
                   </span>
                 </div>
-                <h3 className="text-lg font-bold text-white leading-tight line-clamp-1 mb-1 font-sans text-shadow-gold">
+                <h3 className="text-sm md:text-lg font-bold text-white leading-tight line-clamp-1 mb-0.5 md:mb-1 font-sans text-shadow-gold">
                   {item.title}
                 </h3>
-                <p className="text-xs text-gray-300 line-clamp-1">
+                <p className="text-[10px] md:text-xs text-gray-300 line-clamp-1">
                   {item.releaseDate} • {item.directorOrAuthor}
                 </p>
               </div>
@@ -537,13 +546,29 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                 <div className="absolute inset-0 bg-gradient-to-t from-theme-surface via-transparent to-theme-surface/50" />
             </div>
 
+            {/* Flip toggle on the back face: return to the poster (overlay). */}
+            {showFlipToggle && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsFlipped(false);
+                }}
+                className="absolute top-2 right-9 md:top-3 md:right-11 z-20 p-1.5 md:p-2 rounded-full border transition-colors bg-theme-bg/60 backdrop-blur-md border-theme-border text-theme-subtext hover:text-theme-text hover:border-theme-accent"
+                aria-label={t('media_card.show_poster')}
+                title={t('media_card.show_poster')}
+              >
+                <ImageIcon className="w-4 h-4" />
+              </button>
+            )}
+
             {variant === 'collection' && (
               <button
                 type="button"
                 onClick={handleBackRefresh}
                 disabled={isBackRefreshing}
                 className={clsx(
-                  "absolute top-3 right-3 z-20 p-2 rounded-full border transition-colors",
+                  "absolute top-2 right-2 md:top-3 md:right-3 z-20 p-1.5 md:p-2 rounded-full border transition-colors",
                   "bg-theme-bg/60 backdrop-blur-md border-theme-border text-theme-subtext hover:text-theme-text hover:border-theme-accent",
                   isBackRefreshing && "opacity-60 cursor-not-allowed"
                 )}
@@ -554,14 +579,14 @@ export const MediaCard: React.FC<MediaCardProps> = ({
               </button>
             )}
 
-            <div className="relative z-10 flex flex-col h-full p-4">
-            <h3 className="text-lg 2xl:text-xl font-bold mb-3 text-theme-accent">
+            <div className="relative z-10 flex flex-col h-full p-2 md:p-4">
+            <h3 className="text-xs md:text-lg 2xl:text-xl font-bold mb-1.5 md:mb-3 text-theme-accent">
               {item.title}
             </h3>
-            
+
             <div className="flex-1 overflow-y-auto no-scrollbar relative pr-1">
               {/* Metadata Section */}
-               <div className="mb-3 space-y-1.5 text-xs text-theme-subtext">
+               <div className="mb-2 md:mb-3 space-y-1 text-[11px] md:text-xs text-theme-subtext">
                  {!isUnknownText(item.releaseDate) && (
                    <div className="flex items-center gap-2">
                      <Calendar className="w-3.5 h-3.5 flex-shrink-0 opacity-70" />
@@ -586,38 +611,38 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                  )}
                </div>
 
-               <div className="w-full h-px mb-3 bg-theme-border" />
+               <div className="w-full h-px mb-2 md:mb-3 bg-theme-border" />
 
               {!isUnknownText(item.description) && (
                 <div className={clsx(
-                  "text-sm leading-relaxed mb-4 transition-all duration-300 text-theme-text", 
+                  "text-[11px] md:text-sm leading-relaxed mb-2 md:mb-4 transition-all duration-300 text-theme-text",
                   !isExpanded && "line-clamp-6"
                 )}>
                   {item.description}
                 </div>
               )}
-              
+
               {!isUnknownText(item.description) && item.description.length > 150 && (
-                <button 
+                <button
                   onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
-                  className="text-xs font-medium mb-3 hover:underline text-theme-accent"
+                  className="text-[10px] md:text-xs font-medium mb-2 md:mb-3 hover:underline text-theme-accent"
                 >
                   {isExpanded ? t('media_card.show_less') : t('media_card.view_more')}
                 </button>
               )}
 
               {variant === 'collection' && !isSelectionMode && (
-                <div className="flex justify-end gap-2 mb-3">
+                <div className="flex justify-end gap-1.5 md:gap-2 mb-2 md:mb-3">
                     {(!item.isCollection && onStartCollection) && (
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
                                 onStartCollection();
                             }}
-                            className="p-2 rounded-lg bg-theme-bg border border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors"
+                            className="p-1.5 md:p-2 rounded-lg bg-theme-bg border border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors"
                             title={t('collection.create_collection', { defaultValue: "Create Collection" })}
                         >
-                            <FolderPlus className="w-4 h-4" />
+                            <FolderPlus className="w-3.5 h-3.5 md:w-4 md:h-4" />
                         </button>
                     )}
                     <button
@@ -626,21 +651,21 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                             updateItem(item.id, { isPinned: !item.isPinned });
                         }}
                         className={clsx(
-                          "p-2 rounded-lg border transition-colors",
+                          "p-1.5 md:p-2 rounded-lg border transition-colors",
                           item.isPinned
                             ? "bg-theme-accent text-theme-bg border-theme-accent"
                             : "bg-theme-bg border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent"
                         )}
                         title={item.isPinned ? t('media_card.unpin') : t('media_card.pin')}
                     >
-                        <ChevronsUp className="w-4 h-4" />
+                        <ChevronsUp className="w-3.5 h-3.5 md:w-4 md:h-4" />
                     </button>
                 </div>
               )}
 
               {/* User Review Snippet (Collection Mode) */}
               {variant === 'collection' && item.userReview && (
-                <div className="mb-3 p-2 rounded border bg-theme-bg border-theme-border text-theme-subtext overflow-hidden max-h-24 prose prose-sm max-w-none prose-p:text-xs prose-p:text-theme-subtext prose-p:m-0 prose-p:leading-relaxed prose-headings:text-xs prose-headings:text-theme-subtext prose-headings:m-0 prose-ul:m-0 prose-li:m-0 prose-li:text-theme-subtext">
+                <div className="mb-2 md:mb-3 p-1.5 md:p-2 rounded border bg-theme-bg border-theme-border text-theme-subtext overflow-hidden max-h-24 prose prose-sm max-w-none prose-p:text-xs prose-p:text-theme-subtext prose-p:m-0 prose-p:leading-relaxed prose-headings:text-xs prose-headings:text-theme-subtext prose-headings:m-0 prose-ul:m-0 prose-li:m-0 prose-li:text-theme-subtext">
                    <ReactMarkdown>{item.userReview}</ReactMarkdown>
                 </div>
               )}
@@ -654,7 +679,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
               {/* Tracking Section for Episodic Series in Collection */}
               {isEpisodicItem && item.category && (
-                <div className="mt-2 p-3 2xl:p-4 rounded-lg mb-3 border bg-theme-bg/50 border-theme-border">
+                <div className="mt-1.5 md:mt-2 p-2 md:p-3 2xl:p-4 rounded-lg mb-2 md:mb-3 border bg-theme-bg/50 border-theme-border">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] 2xl:text-xs font-bold uppercase tracking-wider text-theme-accent">{t('media_card.tracking')}</span>
 
@@ -740,16 +765,16 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
             {/* Actions */}
             {variant === 'collection' ? (
-              <div className="mt-4 flex gap-2 relative z-10">
+              <div className="mt-1.5 md:mt-4 flex gap-1.5 md:gap-2 relative z-10">
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     setIsEditModalOpen(true);
                   }}
-                  className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg font-medium transition-colors bg-theme-accent text-theme-bg hover:bg-theme-accent-hover border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent"
+                  className="flex-1 flex items-center justify-center gap-1 md:gap-2 py-1 md:py-2 rounded-lg text-[10px] md:text-sm font-medium transition-colors bg-theme-accent text-theme-bg hover:bg-theme-accent-hover border md:border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent"
                 >
-                  <Edit className="w-4 h-4" />
+                  <Edit className="w-3.5 h-3.5 md:w-4 md:h-4" />
                   {t('media_card.edit')}
                 </button>
                 <button
@@ -764,10 +789,10 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                       toast.success(t('collection.moved_toast', { title: item.title, category: getCategoryLabel(next) }));
                     }
                   }}
-                  className="flex items-center justify-center px-3 py-2 rounded-lg font-medium transition-colors bg-theme-bg text-theme-text hover:bg-theme-bg-hover border-2 border-theme-border focus:outline-none focus:ring-2 focus:ring-theme-accent"
+                  className="flex items-center justify-center px-1.5 py-1 md:px-3 md:py-2 rounded-lg font-medium transition-colors bg-theme-bg text-theme-text hover:bg-theme-bg-hover border md:border-2 border-theme-border focus:outline-none focus:ring-2 focus:ring-theme-accent"
                   title={t('media_card.change_category')}
                 >
-                  {getCategoryIcon(item.category) ?? <Tags className="w-4 h-4" />}
+                  {getCategoryIcon(item.category) ?? <Tags className="w-3.5 h-3.5 md:w-4 md:h-4" />}
                 </button>
                 <button
                   type="button"
@@ -776,10 +801,10 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                     e.stopPropagation();
                     setShowDeleteConfirm(true);
                   }}
-                  className="flex items-center justify-center px-3 py-2 rounded-lg font-medium transition-colors bg-theme-accent-warm text-theme-bg hover:bg-theme-accent-warm-2 border-2 border-theme-accent-warm focus:outline-none focus:ring-2 focus:ring-theme-accent"
+                  className="flex items-center justify-center px-1.5 py-1 md:px-3 md:py-2 rounded-lg font-medium transition-colors bg-theme-accent-warm text-theme-bg hover:bg-theme-accent-warm-2 border md:border-2 border-theme-accent-warm focus:outline-none focus:ring-2 focus:ring-theme-accent"
                   title={t('media_card.delete')}
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                 </button>
               </div>
             ) : (

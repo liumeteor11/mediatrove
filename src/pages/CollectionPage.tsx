@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useCollectionStore } from '../store/useCollectionStore';
 import { MediaCard } from '../components/MediaCard';
 import { CollectionCategory, MediaItem, MediaType } from '../types/types';
-import { Filter, Search as SearchIcon, X, Download, Upload, MoreHorizontal, RefreshCw, Plus, Check, ArrowLeft, Edit3, ChevronDown, Tag } from 'lucide-react';
+import { Filter, Search as SearchIcon, X, Download, Upload, MoreHorizontal, RefreshCw, Plus, Check, ArrowLeft, Edit3, ChevronDown, Tag, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { checkUpdates, repairMediaItem, isPlaceholderPosterUrl } from '../services/aiService';
 import { AddMediaModal } from '../components/AddMediaModal';
 import { save } from '@tauri-apps/plugin-dialog';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 import {
   DndContext, 
@@ -103,6 +104,7 @@ export const CollectionPage: React.FC = () => {
   const menuRef = React.useRef<HTMLDivElement>(null);
   const statusRef = React.useRef<HTMLDivElement>(null);
   const typeRef = React.useRef<HTMLDivElement>(null);
+  const detailOverlayRef = React.useRef<HTMLDivElement>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -114,6 +116,15 @@ export const CollectionPage: React.FC = () => {
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  // Clicking a card opens the detail overlay but leaves keyboard focus on the
+  // card's dnd-kit wrapper (tabindex=0). A stray Space/Enter there starts a
+  // keyboard drag instead of the no-op the user expects — the drag silently
+  // reorders the collection behind the overlay. Hand focus to the overlay
+  // itself so keyboard input lands on it while it is open.
+  React.useEffect(() => {
+    if (selectedId) detailOverlayRef.current?.focus();
+  }, [selectedId]);
 
   const filteredCollection = React.useMemo(() => {
     let base = collection;
@@ -151,6 +162,17 @@ export const CollectionPage: React.FC = () => {
 
     return sorted;
   }, [collection, filter, typeFilter, searchTerm, viewingCollectionId, editMode]);
+
+  // Mobile pagination: 3-column grid, 15 items per page. Desktop keeps the
+  // single scrolling grid it has always had.
+  const isDesktop = useMediaQuery('(min-width: 768px)');
+  const MOBILE_PAGE_SIZE = 15;
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(filteredCollection.length / MOBILE_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const visibleCollection = isDesktop
+    ? filteredCollection
+    : filteredCollection.slice(safePage * MOBILE_PAGE_SIZE, (safePage + 1) * MOBILE_PAGE_SIZE);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -472,8 +494,9 @@ export const CollectionPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 mb-6 md:mb-8">
+    <>
+      <div className="space-y-8">
+      <div className="flex flex-wrap items-center justify-between gap-2 md:gap-6 mb-4 md:mb-8">
         <div className="flex items-center gap-4">
             {viewingCollectionId && (
                 <button 
@@ -486,25 +509,25 @@ export const CollectionPage: React.FC = () => {
             <div>
                 {selectionMode ? (
                      <>
-                        <h1 className="text-3xl font-bold text-theme-accent">{t('collection.selection_mode', { defaultValue: "Selection Mode" })}</h1>
+                        <h1 className="text-2xl md:text-3xl font-bold text-theme-accent">{t('collection.selection_mode', { defaultValue: "Selection Mode" })}</h1>
                         <p className="mt-1 text-theme-subtext">{t('collection.selection_hint', { defaultValue: "Select items to add to collection" })}</p>
                      </>
                 ) : editMode ? (
                      <>
-                        <h1 className="text-3xl font-bold text-theme-accent">{t('collection.edit_mode', { defaultValue: "Edit Collection" })}</h1>
+                        <h1 className="text-2xl md:text-3xl font-bold text-theme-accent">{t('collection.edit_mode', { defaultValue: "Edit Collection" })}</h1>
                         <p className="mt-1 text-theme-subtext">{t('collection.edit_hint', { defaultValue: "Select items to keep in this collection" })}</p>
                      </>
                 ) : viewingCollectionId ? (
                      <>
-                        <h1 className="text-3xl font-bold text-theme-accent">
+                        <h1 className="text-2xl md:text-3xl font-bold text-theme-accent">
                             {collection.find(i => i.id === viewingCollectionId)?.title || t('collection.collection_view')}
                         </h1>
                         <p className="mt-1 text-theme-subtext">{t('collection.collection_view', { defaultValue: "Collection View" })}</p>
                      </>
                 ) : (
                      <>
-                        <h1 className="text-3xl font-bold text-theme-accent">{t('collection.title')}</h1>
-                        <p className="mt-1 text-theme-subtext">{t('collection.subtitle')}</p>
+                        <h1 className="text-2xl md:text-3xl font-bold text-theme-accent">{t('collection.title')}</h1>
+                        <p className="mt-1 hidden md:block text-theme-subtext">{t('collection.subtitle')}</p>
                      </>
                 )}
             </div>
@@ -528,15 +551,15 @@ export const CollectionPage: React.FC = () => {
                 </button>
             </div>
         ) : (
-            <div className="flex flex-col sm:flex-row gap-3 md:gap-4">
-                 <div className="relative">
+            <div className="flex flex-wrap sm:flex-nowrap flex-1 sm:flex-none items-center gap-2 md:gap-4 min-w-[240px]">
+                 <div className="relative flex-1 sm:flex-none min-w-[150px]">
                     <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-subtext" />
-                    <input 
-                        type="text" 
+                    <input
+                        type="text"
                         placeholder={t('collection.filter_placeholder')}
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="pl-9 pr-4 py-2 rounded-lg border focus:ring-2 outline-none w-full sm:w-64 transition-all bg-theme-surface border-theme-border text-theme-text focus:border-theme-accent focus:ring-theme-accent/20 placeholder-theme-subtext"
+                        className="pl-9 pr-4 py-1.5 md:py-2 rounded-lg border focus:ring-2 outline-none w-full sm:w-64 transition-all bg-theme-surface border-theme-border text-sm text-theme-text focus:border-theme-accent focus:ring-theme-accent/20 placeholder-theme-subtext"
                     />
                 </div>
                 
@@ -544,7 +567,7 @@ export const CollectionPage: React.FC = () => {
                     onClick={handleRefresh}
                     disabled={isRefreshing}
                     className={clsx(
-                        "p-2 rounded-lg border transition-colors flex items-center justify-center",
+                        "p-1.5 md:p-2 rounded-lg border transition-colors flex items-center justify-center",
                         isRefreshing
                             ? "bg-theme-surface border-theme-border text-theme-subtext cursor-wait"
                             : "bg-theme-surface border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent"
@@ -557,7 +580,7 @@ export const CollectionPage: React.FC = () => {
                 {viewingCollectionId && (
                     <button
                         onClick={handleStartEditCollection}
-                        className="p-2 rounded-lg border bg-theme-surface border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors flex items-center justify-center"
+                        className="p-1.5 md:p-2 rounded-lg border bg-theme-surface border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors flex items-center justify-center"
                         title={t('collection.edit_collection', { defaultValue: "Edit Collection" })}
                     >
                         <Edit3 className="w-5 h-5" />
@@ -566,19 +589,19 @@ export const CollectionPage: React.FC = () => {
 
                 <button
                     onClick={() => setIsAddModalOpen(true)}
-                    className="p-2 rounded-lg border bg-theme-surface border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors flex items-center justify-center"
+                    className="p-1.5 md:p-2 rounded-lg border bg-theme-surface border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors flex items-center justify-center"
                     title={t('collection.add_manual_tooltip', { defaultValue: "Add Manually" })}
                 >
                     <Plus className="w-5 h-5" />
                 </button>
 
-                <div className="flex gap-2 items-center">
+                <div className="flex gap-1.5 md:gap-2 items-center">
                     {/* Status filter dropdown: All / Favorites / To Watch / Watched */}
                     <div className="relative" ref={statusRef}>
                         <button
                             onClick={() => { setStatusOpen(!statusOpen); setTypeOpen(false); }}
                             className={clsx(
-                              "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors flex items-center gap-2",
+                              "px-3 py-1.5 md:px-4 md:py-2 rounded-full text-xs md:text-sm font-medium whitespace-nowrap transition-colors flex items-center gap-1.5 md:gap-2",
                               (filter !== 'All' || statusOpen)
                                 ? "bg-theme-accent text-theme-bg"
                                 : "bg-theme-surface border border-theme-border text-theme-text hover:bg-theme-bg"
@@ -615,7 +638,7 @@ export const CollectionPage: React.FC = () => {
                         <button
                             onClick={() => { setTypeOpen(!typeOpen); setStatusOpen(false); }}
                             className={clsx(
-                              "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors flex items-center gap-2",
+                              "px-3 py-1.5 md:px-4 md:py-2 rounded-full text-xs md:text-sm font-medium whitespace-nowrap transition-colors flex items-center gap-1.5 md:gap-2",
                               (typeFilter !== 'All' || typeOpen)
                                 ? "bg-theme-accent text-theme-bg"
                                 : "bg-theme-surface border border-theme-border text-theme-text hover:bg-theme-bg"
@@ -701,12 +724,12 @@ export const CollectionPage: React.FC = () => {
             collisionDetection={closestCenter} 
             onDragEnd={handleDragEnd}
           >
-            <SortableContext 
-              items={filteredCollection.map(i => i.id)}
+            <SortableContext
+              items={visibleCollection.map(i => i.id)}
               strategy={rectSortingStrategy}
             >
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
-                    {filteredCollection.map((item, index) => (
+                <div className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
+                    {visibleCollection.map((item, index) => (
                         <SortableItem 
                             key={item.id} 
                             item={item} 
@@ -732,9 +755,9 @@ export const CollectionPage: React.FC = () => {
             </SortableContext>
           </DndContext>
         ) : (
-            <motion.div layout className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
+            <motion.div layout className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
                 <AnimatePresence>
-                    {filteredCollection.map((item, index) => (
+                    {visibleCollection.map((item, index) => (
                         <MediaCard 
                             key={item.id} 
                             item={item} 
@@ -763,12 +786,43 @@ export const CollectionPage: React.FC = () => {
         )
       )}
 
+      {/* Mobile pager: 15 items (3×5) per page. Desktop scrolls instead. */}
+      {!isDesktop && pageCount > 1 && (
+        <div className="flex items-center justify-center gap-3 mt-5">
+          <button
+            onClick={() => setPage(safePage - 1)}
+            disabled={safePage === 0}
+            className="p-2 rounded-lg border transition-colors bg-theme-surface border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent disabled:opacity-40 disabled:cursor-not-allowed"
+            title={t('collection.prev_page', { defaultValue: 'Previous page' })}
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="text-sm text-theme-subtext tabular-nums">
+            {t('collection.page_of', { page: safePage + 1, total: pageCount, defaultValue: `${safePage + 1} / ${pageCount}` })}
+          </span>
+          <button
+            onClick={() => setPage(safePage + 1)}
+            disabled={safePage >= pageCount - 1}
+            className="p-2 rounded-lg border transition-colors bg-theme-surface border-theme-border text-theme-subtext hover:text-theme-accent hover:border-theme-accent disabled:opacity-40 disabled:cursor-not-allowed"
+            title={t('collection.next_page', { defaultValue: 'Next page' })}
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {filteredCollection.length === 0 && collection.length > 0 && (
           <div className="text-center py-12">
               <p className="text-theme-subtext">{t('collection.no_matches')}</p>
           </div>
       )}
 
+      </div>
+
+      {/* Fixed overlays live OUTSIDE the space-y-8 container: Tailwind v4's
+          space-y gives every non-last child a bottom margin, and a bottom
+          margin on a fixed inset-0 element shrinks it — the backdrop used to
+          stop 32px short of the screen bottom. */}
       <AnimatePresence>
         {selectedId && (
           <>
@@ -779,8 +833,17 @@ export const CollectionPage: React.FC = () => {
               className="fixed inset-0 bg-black/80 z-[60] backdrop-blur-sm"
               onClick={() => setSelectedId(null)}
             />
-            <div className="fixed inset-0 grid place-items-center z-[70] pointer-events-none p-4 md:p-8">
-               <div className="pointer-events-auto h-[70vh] md:h-[85vh] aspect-[1/1.48] shadow-2xl relative max-w-full">
+            <div
+              ref={detailOverlayRef}
+              tabIndex={-1}
+              onKeyDown={(e) => {
+                // The overlay floats above the grid; Space would scroll the
+                // hidden list underneath. Swallow it while the overlay is up.
+                if (e.key === ' ') e.preventDefault();
+              }}
+              className="fixed inset-0 grid place-items-center z-[70] pointer-events-none p-4 md:p-8 outline-none"
+            >
+               <div className="pointer-events-auto w-full aspect-[1/1.48] md:w-auto md:h-[85vh] shadow-2xl relative max-w-full">
                   {collection.find(item => item.id === selectedId) && (
                      <MediaCard
                         item={collection.find(item => item.id === selectedId)!}
@@ -789,6 +852,11 @@ export const CollectionPage: React.FC = () => {
                         showActions={true}
                         className="w-full h-full"
                         variant="collection"
+                        // On touch screens there is no hover-flip, so start the
+                        // detail card on the metadata face (Edit/actions are
+                        // there) and offer an explicit poster toggle.
+                        defaultFlipped={!isDesktop}
+                        showFlipToggle={!isDesktop}
                      />
                   )}
                   <button
@@ -806,6 +874,6 @@ export const CollectionPage: React.FC = () => {
       {isAddModalOpen && (
         <AddMediaModal onClose={() => setIsAddModalOpen(false)} />
       )}
-    </div>
+    </>
   );
 };

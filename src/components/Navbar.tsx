@@ -226,7 +226,7 @@ export const Navbar: React.FC = () => {
               
               <div className="px-3 py-2">
                 <p className="text-xs font-semibold text-theme-subtext uppercase tracking-wider mb-2">{t('common.select_theme')}</p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-1.5">
                   {themes.map((t) => (
                     <button
                       key={t.id}
@@ -235,7 +235,7 @@ export const Navbar: React.FC = () => {
                         setIsOpen(false);
                       }}
                       className={clsx(
-                        "flex items-center justify-center px-3 py-2 rounded-md text-sm font-medium border transition-colors",
+                        "flex items-center justify-center px-2 py-1.5 rounded-md text-xs font-medium border transition-colors whitespace-nowrap",
                         theme === t.id
                           ? "bg-theme-accent text-theme-bg border-2 border-theme-accent"
                           : "bg-theme-bg text-theme-text border-theme-border hover:border-theme-accent"
