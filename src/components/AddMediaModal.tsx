@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { toast } from 'react-toastify';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface AddMediaModalProps {
     onClose: () => void;
@@ -14,6 +15,7 @@ interface AddMediaModalProps {
 export const AddMediaModal: React.FC<AddMediaModalProps> = ({ onClose }) => {
     const { t } = useTranslation();
     const { addToCollection } = useCollectionStore();
+    useEscapeToClose(onClose);
 
     const [title, setTitle] = useState('');
     const [type, setType] = useState<MediaType>(MediaType.MOVIE);

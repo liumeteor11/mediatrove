@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { X, MessageCircle, Trash2, ShieldAlert, Plus, History, ChevronDown } from 'lucide-react';
 import { DistilledCharacter } from '../../types/character';
 import { useCharacterStore } from '../../store/useCharacterStore';
+import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 
 interface CharacterDetailModalProps {
   character: DistilledCharacter;
@@ -52,6 +53,7 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({ char
   const { t } = useTranslation();
   const addCorrection = useCharacterStore(s => s.addCorrection);
   const removeCorrection = useCharacterStore(s => s.removeCorrection);
+  useEscapeToClose(onClose);
   const [showCorrectionForm, setShowCorrectionForm] = useState(false);
   const [scene, setScene] = useState('');
   const [wrong, setWrong] = useState('');

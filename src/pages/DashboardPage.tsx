@@ -691,7 +691,12 @@ const AuthoritativeDomainsPanel: React.FC = () => {
             placeholder={t('dashboard.domain_placeholder')} 
             value={newDomain} 
             onChange={e=>setNewDomain(e.target.value)} 
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+            onKeyDown={(e) => {
+              // Don't treat the Enter that commits IME candidate text as a submit
+              // (keyCode 229 = legacy WebKit composition marker).
+              const composing = e.nativeEvent.isComposing || e.keyCode === 229;
+              if (e.key === 'Enter' && !composing) handleAdd();
+            }}
         />
         <button className="px-2 py-1 text-xs rounded-md border-2 border-theme-accent bg-theme-accent text-theme-bg hover:bg-theme-accent-hover transition-colors" onClick={handleAdd}>{t('dashboard.add')}</button>
       </div>

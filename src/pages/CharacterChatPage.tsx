@@ -177,7 +177,11 @@ export const CharacterChatPage: React.FC = () => {
   }, [character, activeSession, pending, input, attachments, updateSession, t]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Ignore Enter while an IME composition is in flight: the Enter that
+    // commits CJK candidate text would otherwise send an unfinished message.
+    // keyCode 229 is the legacy composition marker on WebKit.
+    const composing = e.nativeEvent.isComposing || e.keyCode === 229;
+    if (e.key === 'Enter' && !e.shiftKey && !composing) {
       e.preventDefault();
       handleSend();
     }
@@ -428,7 +432,10 @@ export const CharacterChatPage: React.FC = () => {
                       value={renameText}
                       onChange={(e) => setRenameText(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                        // Skip the Enter that commits IME candidate text
+                        // (keyCode 229 = legacy WebKit composition marker).
+                        const composing = e.nativeEvent.isComposing || e.keyCode === 229;
+                        if (e.key === 'Enter' && !composing) {
                           renameSession(session.id, renameText);
                           setRenamingId(null);
                         } else if (e.key === 'Escape') {

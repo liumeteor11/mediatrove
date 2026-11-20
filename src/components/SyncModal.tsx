@@ -6,6 +6,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useAIStore } from '../store/useAIStore';
 import { useThemeStore } from '../store/useThemeStore';
 import { useTranslation } from 'react-i18next';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface PeerInfo {
     name: string;
@@ -57,14 +58,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
 
     // Close on Escape: the modal content (with the generated QR) can grow
     // taller than the window, so a keyboard escape hatch is essential.
-    useEffect(() => {
-        if (!isOpen) return;
-        const handleKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
-        };
-        window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
-    }, [isOpen, onClose]);
+    useEscapeToClose(onClose, isOpen);
 
     // Countdown for the one-time pairing code; the QR stays visible but is
     // marked expired so the user knows to regenerate instead of retrying.

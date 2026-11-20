@@ -6,6 +6,7 @@ import { PluginExecutor } from '../services/pluginService';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { toast } from 'react-toastify';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface PluginManagerModalProps {
     onClose: () => void;
@@ -33,6 +34,7 @@ return {
 export const PluginManagerModal: React.FC<PluginManagerModalProps> = ({ onClose }) => {
     const { t } = useTranslation();
     const { plugins, addPlugin, updatePlugin, removePlugin, togglePlugin } = usePluginStore();
+    useEscapeToClose(onClose);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [formData, setFormData] = useState({
         name: '',

@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useThemeStore } from '../store/useThemeStore';
 import clsx from 'clsx';
 import { FALLBACK_POSTER } from '../services/aiService';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface ShareCardModalProps {
   item: MediaItem;
@@ -17,6 +18,7 @@ export const ShareCardModal: React.FC<ShareCardModalProps> = ({ item, onClose })
   const cardRef = useRef<HTMLDivElement>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const { theme } = useThemeStore();
+  useEscapeToClose(onClose);
 
   const normalizeImgSrc = (value?: string): string | undefined => {
     let s = String(value ?? '').trim();

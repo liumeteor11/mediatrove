@@ -7,6 +7,7 @@ import clsx from 'clsx';
 import { toast } from 'react-toastify';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface EditMediaModalProps {
   item: MediaItem;
@@ -54,12 +55,32 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
   const [editTotalEpisodes, setEditTotalEpisodes] = useState(item.totalEpisodes != null ? String(item.totalEpisodes) : '');
   const [editUserProgress, setEditUserProgress] = useState(item.userProgress || '');
   const [isSaving, setIsSaving] = useState(false);
-  const [viewMode, setViewMode] = useState<'edit' | 'split' | 'preview'>('edit');
+  const [viewMode, setViewMode] = useState<'edit' | 'split' | 'preview'>('split');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  useEscapeToClose(onClose);
+
   // Image Upload & Crop State
   const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const previewRef = React.useRef<HTMLDivElement>(null);
+
+  // Live preview scroll sync (split view): keep the rendered pane aligned with
+  // the cursor's position in the markdown source, proportionally.
+  const syncPreviewScroll = React.useCallback(() => {
+    const ta = textareaRef.current;
+    const pv = previewRef.current;
+    if (!ta || !pv) return;
+    const taMax = ta.scrollHeight - ta.clientHeight;
+    const pvMax = pv.scrollHeight - pv.clientHeight;
+    const ratio = taMax > 0 ? ta.scrollTop / taMax : 0;
+    pv.scrollTop = ratio * pvMax;
+  }, []);
+
+  // Re-align when entering split view (the preview pane starts at the top).
+  React.useEffect(() => {
+    if (viewMode === 'split') requestAnimationFrame(syncPreviewScroll);
+  }, [viewMode, syncPreviewScroll]);
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
@@ -409,6 +430,7 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
                     value={reviewContent}
                     onChange={(e) => setReviewContent(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    onScroll={syncPreviewScroll}
                     placeholder={t('edit_modal.markdown_placeholder')}
                     className={clsx(
                       "h-full p-4 rounded-xl border bg-theme-surface border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent focus:border-transparent outline-none resize-none font-mono text-sm leading-relaxed",
@@ -418,7 +440,9 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
                 )}
                 
                 {(viewMode === 'preview' || viewMode === 'split') && (
-                    <div className={clsx(
+                    <div
+                      ref={previewRef}
+                      className={clsx(
                        "h-full p-4 rounded-xl border bg-theme-surface border-theme-border text-theme-text overflow-y-auto prose prose-sm max-w-none",
                        viewMode === 'split' ? "w-1/2" : "w-full flex-1"
                     )}>

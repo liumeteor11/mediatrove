@@ -7,6 +7,7 @@ import { useAIStore } from '../../store/useAIStore';
 import { suggestCharacterNames } from '../../services/characterService';
 import { describeAIError } from '../../services/aiService';
 import { MediaItem, MediaType } from '../../types/types';
+import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 
 interface DistillModalProps {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export const DistillModal: React.FC<DistillModalProps> = ({ isOpen, onClose }) =
   const collection = useCollectionStore(s => s.collection);
   const startDistill = useCharacterStore(s => s.startDistill);
   const apiKey = useAIStore(s => s.apiKey);
+  useEscapeToClose(onClose, isOpen);
 
   const [workSelection, setWorkSelection] = useState<string>('');
   const [manualTitle, setManualTitle] = useState('');

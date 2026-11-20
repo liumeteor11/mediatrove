@@ -5,6 +5,7 @@ import { useCollectionStore } from '../store/useCollectionStore';
 import { parseImportFile, ImportSource } from '../services/importService';
 import clsx from 'clsx';
 import { toast } from 'react-toastify';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface ImportMediaModalProps {
     onClose: () => void;
@@ -13,6 +14,7 @@ interface ImportMediaModalProps {
 export const ImportMediaModal: React.FC<ImportMediaModalProps> = ({ onClose }) => {
     const { t } = useTranslation();
     const { importCollection } = useCollectionStore();
+    useEscapeToClose(onClose);
     const [source, setSource] = useState<ImportSource>('trakt');
     const [file, setFile] = useState<File | null>(null);
     const [isProcessing, setIsProcessing] = useState(false);
