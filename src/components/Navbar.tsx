@@ -247,14 +247,7 @@ export const Navbar: React.FC = () => {
                 </div>
               </div>
 
-               {user ? (
-                 <button
-                  onClick={() => { logout(); setIsOpen(false); }}
-                  className="w-full text-left flex items-center gap-2 px-3 py-2 rounded-md text-base font-medium text-red-500 hover:bg-red-500/10"
-                >
-                  {t('nav.sign_out')}
-                </button>
-              ) : (
+              {!user && (
                 <Link
                   to="/login"
                   onClick={() => setIsOpen(false)}

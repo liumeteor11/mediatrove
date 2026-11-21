@@ -10,7 +10,9 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Ba
 import { CollectionCategory, MediaType, MediaItem } from '../types/types';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
-import { Bell, Upload, Activity, ChevronDown, ChevronUp, BarChart2, X, Wifi } from 'lucide-react';
+import { Bell, Upload, Activity, ChevronDown, ChevronUp, BarChart2, X, Wifi, LogOut } from 'lucide-react';
+import { useAuthStore } from '../store/useAuthStore';
+import { useNavigate } from 'react-router-dom';
 import { useAIStore } from '../store/useAIStore';
 import { toast } from 'react-toastify';
 import { testAuthoritativeDomain, clearSearchCache, checkUpdates } from '../services/aiService';
@@ -85,7 +87,7 @@ const YearlyReport: React.FC<{ collection: MediaItem[] }> = ({ collection }) => 
     return (
         <div className="p-4 rounded-theme shadow-theme border bg-theme-surface border-theme-border mb-8 transition-all duration-300">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                     <div className="flex items-center gap-2">
                         <h3 className="font-bold text-theme-text whitespace-nowrap">{t('dashboard.yearly_report')}</h3>
                         <select 
@@ -101,16 +103,16 @@ const YearlyReport: React.FC<{ collection: MediaItem[] }> = ({ collection }) => 
                     
                     <div className="hidden md:block h-6 w-[1px] bg-theme-border mx-2"></div>
                     
-                    <div className="flex items-center gap-6 text-sm">
-                        <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs md:text-sm md:gap-x-6">
+                        <div className="flex items-center gap-1.5 md:gap-2">
                             <span className="text-theme-subtext">{t('dashboard.items_added')}:</span>
                             <span className="font-bold text-theme-text">{totalAdded}</span>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 md:gap-2">
                             <span className="text-theme-subtext">{t('dashboard.most_active_month')}:</span>
                             <span className="font-bold text-theme-text">{topMonth}</span>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 md:gap-2">
                             <span className="text-theme-subtext">{t('dashboard.favorite_category')}:</span>
                             <span className="font-bold text-theme-text max-w-[100px] truncate" title={topCategory === '-' ? '' : t(`media_type.${topCategory}`)}>
                                 {topCategory === '-' ? '-' : t(`media_type.${topCategory}`)}
@@ -173,6 +175,8 @@ export const DashboardPage: React.FC = () => {
   const { getStats, collection, updateItem, bumpToFront } = useCollectionStore();
   const { theme } = useThemeStore();
   const { t } = useTranslation();
+  const logout = useAuthStore(s => s.logout);
+  const navigate = useNavigate();
   const stats = getStats();
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isSyncOpen, setIsSyncOpen] = useState(false);
@@ -243,7 +247,8 @@ export const DashboardPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8">
+    <>
+      <div className="space-y-8">
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-bold text-theme-accent">{t('dashboard.title')}</h1>
         <div className="flex items-center gap-2">
@@ -328,6 +333,14 @@ export const DashboardPage: React.FC = () => {
               <span className="hidden sm:inline">{t('dashboard.sync')}</span>
             </button>
             <UpdateButton />
+            <button
+              onClick={() => { logout(); navigate('/'); }}
+              className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors text-red-500 hover:bg-red-500/10 focus:outline-none focus:ring-2 focus:ring-theme-accent"
+              title={t('nav.sign_out')}
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">{t('nav.sign_out')}</span>
+            </button>
         </div>
       </div>
 
@@ -364,7 +377,7 @@ export const DashboardPage: React.FC = () => {
                     className="sr-only peer"
                     aria-label={t('dashboard.search_diag_toggle')}
                   />
-                  <div className="w-10 h-5 bg-theme-border border border-theme-subtext/20 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-theme-accent rounded-full peer after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:bg-theme-accent/70" />
+                  <div className="w-10 h-5 relative bg-theme-border border border-theme-subtext/20 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-theme-accent rounded-full peer after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-[18px] peer-checked:bg-theme-accent/70" />
                   <span className="ms-2 text-[11px] font-medium text-theme-subtext">
                     {enableSearchDiagnostics ? t('dashboard.search_diag_on') : t('dashboard.search_diag_off')}
                   </span>
@@ -612,9 +625,10 @@ export const DashboardPage: React.FC = () => {
              )}
         </div>
       </div>
+      </div>
       {isImportModalOpen && <ImportMediaModal onClose={() => setIsImportModalOpen(false)} />}
       <SyncModal isOpen={isSyncOpen} onClose={() => setIsSyncOpen(false)} />
-    </div>
+    </>
   );
 };
 

@@ -305,7 +305,7 @@ export const AIConfigPanel: React.FC = () => {
   const reasoningOptions = REASONING_LEVELS.filter(l => modelCaps.reasoningLevels.includes(l));
 
   return (
-    <div className="bg-theme-surface border border-theme-border rounded-xl p-5 shadow-sm">
+    <div className="bg-theme-surface border border-theme-border rounded-xl p-3 md:p-5 shadow-sm">
       <div className="flex items-center gap-2 border-b border-theme-border pb-3">
         <button
           type="button"
@@ -313,8 +313,8 @@ export const AIConfigPanel: React.FC = () => {
           aria-expanded={!panelCollapsed}
           className="flex items-center gap-2 flex-1 min-w-0 text-left group"
         >
-          <Activity className="w-6 h-6 text-theme-accent shrink-0" />
-          <h2 className="text-xl font-bold text-theme-text whitespace-nowrap">{t('ai_config.title')}</h2>
+          <Activity className="w-5 h-5 md:w-6 md:h-6 text-theme-accent shrink-0" />
+          <h2 className="text-base md:text-xl font-bold text-theme-text whitespace-nowrap">{t('ai_config.title')}</h2>
           <span className="text-xs text-theme-subtext truncate">
             {providerLabel(provider)}{model ? ` · ${model}` : ''}
           </span>
@@ -327,7 +327,7 @@ export const AIConfigPanel: React.FC = () => {
         </button>
         <button
           onClick={() => setIsPluginManagerOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-theme-border bg-theme-bg text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors shrink-0"
+          className="flex items-center gap-1 md:gap-1.5 px-2 py-1 text-[10px] md:px-3 md:py-1.5 md:text-xs rounded-lg border border-theme-border bg-theme-bg text-theme-subtext hover:text-theme-accent hover:border-theme-accent transition-colors shrink-0"
         >
           <Plug className="w-3.5 h-3.5" />
           {t('plugin_manager.title')}
@@ -337,7 +337,7 @@ export const AIConfigPanel: React.FC = () => {
       {!panelCollapsed && (
       <>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-5">
         {/* Left Column */}
         <div className="space-y-3">
           <div>
@@ -345,7 +345,7 @@ export const AIConfigPanel: React.FC = () => {
             <select 
               value={provider} 
               onChange={(e) => setProvider(e.target.value as AIProvider)}
-              className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+              className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
             >
               {PROVIDER_OPTIONS.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -359,7 +359,7 @@ export const AIConfigPanel: React.FC = () => {
               type="text" 
               value={baseUrl}
               onChange={(e) => setConfig({ baseUrl: e.target.value })}
-              className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+              className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
               placeholder="https://api.example.com/v1"
             />
           </div>
@@ -375,7 +375,7 @@ export const AIConfigPanel: React.FC = () => {
                   const next = localKey.trim();
                   if (next !== getDecryptedApiKey()) setConfig({ apiKey: next });
                 }}
-                className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                className="w-full px-3 py-1.5 pr-10 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                 placeholder={t('ai_config.api_key_placeholder', { defaultValue: "sk-..." })}
               />
               <button 
@@ -411,7 +411,7 @@ export const AIConfigPanel: React.FC = () => {
                 <button 
                     onClick={handleTestConnection}
                     disabled={isTesting}
-                    className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 ml-2 flex items-center gap-1"
+                    className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 sm:ml-2 flex items-center gap-1 self-end sm:self-start"
                 >
                     {isTesting && <Activity className="w-3 h-3 animate-spin" />}
                     {t('ai_config.test_connection_btn')}
@@ -439,7 +439,7 @@ export const AIConfigPanel: React.FC = () => {
                      type="text" 
                      value={model} 
                      onChange={(e) => setConfig({ model: e.target.value })}
-                     className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                     className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                      placeholder={provider === 'custom' ? t('ai_config.enter_model_name') : t('ai_config.enter_custom_model_name')}
                    />
                    {provider !== 'custom' && (
@@ -468,7 +468,7 @@ export const AIConfigPanel: React.FC = () => {
                            setConfig({ model: e.target.value });
                        }
                    }}
-                   className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                   className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                  >
                    {availableModels.map(m => (
                      <option key={m.name} value={m.name} className={m.deprecated ? 'text-theme-subtext/50' : ''}>
@@ -489,7 +489,7 @@ export const AIConfigPanel: React.FC = () => {
               type="number" 
               value={maxTokens}
               onChange={(e) => setConfig({ maxTokens: parseInt(e.target.value) })}
-              className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+              className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
             />
           </div>
 
@@ -527,7 +527,7 @@ export const AIConfigPanel: React.FC = () => {
                             onChange={(e) => setConfig({ enableNetworking: e.target.checked })} 
                             className="sr-only peer" 
                         />
-                        <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                        <div className="w-11 h-6 relative shrink-0 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-[16px]"></div>
                     </label>
                 </div>
                 <p className="text-xs text-theme-subtext/70">
@@ -581,7 +581,7 @@ export const AIConfigPanel: React.FC = () => {
                             onChange={(e) => setConfig({ enableTrending: e.target.checked })}
                             className="sr-only peer"
                         />
-                        <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                        <div className="w-11 h-6 relative shrink-0 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-[16px]"></div>
                     </label>
                 </div>
 
@@ -666,12 +666,12 @@ export const AIConfigPanel: React.FC = () => {
 
       {/* Web Search Configuration */}
       <div className="mt-5 border-t border-theme-border pt-4">
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 md:gap-5">
           <div>
         <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
                 <Globe className="w-5 h-5 text-theme-accent" />
-                <h3 className="text-lg font-semibold text-theme-text">{t('ai_config.web_search_capabilities')}</h3>
+                <h3 className="text-sm md:text-lg font-semibold text-theme-text">{t('ai_config.web_search_capabilities')}</h3>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
               <input 
@@ -680,7 +680,7 @@ export const AIConfigPanel: React.FC = () => {
                 onChange={(e) => setConfig({ enableSearch: e.target.checked })} 
                 className="sr-only peer" 
               />
-              <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-theme-accent rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2"></div>
+              <div className="w-11 h-6 relative shrink-0 bg-theme-border border-2 border-theme-subtext/20 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-theme-accent rounded-full peer peer-checked:after:translate-x-[16px] rtl:peer-checked:after:-translate-x-[16px] peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2"></div>
               <span className="ms-3 text-sm font-medium text-theme-text">{t('ai_config.enable_web_search')}</span>
             </label>
         </div>
@@ -716,7 +716,7 @@ export const AIConfigPanel: React.FC = () => {
                                     type={showVertexKey ? "text" : "password"}
                                     value={localVertexKey}
                                     onChange={(e) => setLocalVertexKey(e.target.value)}
-                                    className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                    className="w-full px-3 py-1.5 pr-10 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                     placeholder="AIza..."
                                 />
                                  <button
@@ -740,7 +740,7 @@ export const AIConfigPanel: React.FC = () => {
                                 type="text"
                                 value={vertexSearchProject}
                                 onChange={(e) => setConfig({ vertexSearchProject: e.target.value })}
-                                className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                 placeholder="my-gcp-project"
                             />
                             <p className="text-xs text-theme-subtext/70 italic mt-1">
@@ -753,7 +753,7 @@ export const AIConfigPanel: React.FC = () => {
                                 type="text"
                                 value={vertexSearchEngine}
                                 onChange={(e) => setConfig({ vertexSearchEngine: e.target.value })}
-                                className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                 placeholder="my-search-app"
                             />
                         </div>
@@ -762,7 +762,7 @@ export const AIConfigPanel: React.FC = () => {
                             <select
                                 value={vertexSearchLocation || 'global'}
                                 onChange={(e) => setConfig({ vertexSearchLocation: e.target.value })}
-                                className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                             >
                                 <option value="global">global</option>
                                 <option value="eu">eu</option>
@@ -786,7 +786,7 @@ export const AIConfigPanel: React.FC = () => {
                                 type={showSerperKey ? "text" : "password"} 
                                 value={localSerperKey}
                                 onChange={(e) => setLocalSerperKey(e.target.value)}
-                                className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                className="w-full px-3 py-1.5 pr-10 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                 placeholder={t('ai_config.serper_key_placeholder')}
                             />
                              <button 
@@ -834,7 +834,7 @@ export const AIConfigPanel: React.FC = () => {
                                 type="text" 
                                 value={yandexSearchLogin}
                                 onChange={(e) => setConfig({ yandexSearchLogin: e.target.value })}
-                                className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                 placeholder={t('ai_config.yandex_user_placeholder')}
                             />
                         </div>
@@ -845,7 +845,7 @@ export const AIConfigPanel: React.FC = () => {
                                     type={showYandexKey ? "text" : "password"} 
                                     value={localYandexKey}
                                     onChange={(e) => setLocalYandexKey(e.target.value)}
-                                    className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                    className="w-full px-3 py-1.5 pr-10 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                     placeholder={t('ai_config.yandex_key_placeholder')}
                                 />
                                  <button 
@@ -903,7 +903,7 @@ export const AIConfigPanel: React.FC = () => {
                     onChange={(e) => setLocalUseSystemProxy(e.target.checked)} 
                     className="sr-only peer" 
                   />
-                  <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                  <div className="w-11 h-6 relative shrink-0 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-[16px]"></div>
                 </label>
               </div>
               <div className="flex items-center justify-end">
@@ -923,7 +923,7 @@ export const AIConfigPanel: React.FC = () => {
                     <select 
                       value={localProxyProtocol}
                       onChange={(e) => setLocalProxyProtocol(e.target.value as 'http' | 'socks5')}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                     >
                       <option value="http">HTTP</option>
                       <option value="socks5">SOCKS5</option>
@@ -935,7 +935,7 @@ export const AIConfigPanel: React.FC = () => {
                       type="text" 
                       value={localProxyHost}
                       onChange={(e) => setLocalProxyHost(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                       placeholder="127.0.0.1"
                     />
                   </div>
@@ -945,7 +945,7 @@ export const AIConfigPanel: React.FC = () => {
                       type="text" 
                       value={localProxyPort}
                       onChange={(e) => setLocalProxyPort(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                       placeholder="7890"
                     />
                   </div>
@@ -955,7 +955,7 @@ export const AIConfigPanel: React.FC = () => {
                       type="text" 
                       value={localProxyUsername}
                       onChange={(e) => setLocalProxyUsername(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                       placeholder=""
                     />
                   </div>
@@ -965,7 +965,7 @@ export const AIConfigPanel: React.FC = () => {
                       type="password" 
                       value={localProxyPassword}
                       onChange={(e) => setLocalProxyPassword(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                      className="w-full px-3 py-1.5 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                       placeholder=""
                     />
                   </div>
@@ -1005,7 +1005,7 @@ export const AIConfigPanel: React.FC = () => {
                                     }} 
                                     className="sr-only peer" 
                                 />
-                                <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                                <div className="w-11 h-6 relative shrink-0 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-[16px]"></div>
                             </label>
                         </div>
                         {enableBangumi && (
@@ -1016,7 +1016,7 @@ export const AIConfigPanel: React.FC = () => {
                                         type={showBangumiToken ? "text" : "password"} 
                                         value={localBangumiToken}
                                         onChange={(e) => setLocalBangumiToken(e.target.value)}
-                                        className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                        className="w-full px-3 py-1.5 pr-10 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                         placeholder="Access Token"
                                     />
                                     <button 
@@ -1027,7 +1027,7 @@ export const AIConfigPanel: React.FC = () => {
                                         {showBangumiToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                     </button>
                                 </div>
-                                <div className="flex justify-between items-start mt-1">
+                                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mt-1">
                                     <div className="flex flex-col gap-1">
                                         <p className="text-xs text-theme-subtext flex items-center gap-1">
                                             <Info className="w-3 h-3" />
@@ -1037,7 +1037,7 @@ export const AIConfigPanel: React.FC = () => {
                                             {t('ai_config.get_bangumi_token')}
                                         </a>
                                     </div>
-                                    <button onClick={handleTestBangumi} disabled={isBangumiTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 ml-2">
+                                    <button onClick={handleTestBangumi} disabled={isBangumiTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 sm:ml-2">
                                         {isBangumiTesting ? 'Testing...' : t('ai_config.test_connection_btn')}
                                     </button>
                                 </div>
@@ -1058,7 +1058,7 @@ export const AIConfigPanel: React.FC = () => {
                                     onChange={(e) => setConfig({ enableTmdb: e.target.checked })} 
                                         className="sr-only peer" 
                                     />
-                                    <div className="w-11 h-6 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                                    <div className="w-11 h-6 relative shrink-0 bg-theme-border border-2 border-theme-subtext/20 rounded-full peer peer-focus:ring-2 peer-focus:ring-theme-accent peer-checked:bg-gradient-to-r peer-checked:from-theme-accent-warm peer-checked:to-theme-accent-warm-2 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-[16px]"></div>
                                 </label>
                             </div>
                         {enableTmdb && (
@@ -1069,7 +1069,7 @@ export const AIConfigPanel: React.FC = () => {
                                             type={showTmdbKey ? "text" : "password"} 
                                             value={localTmdbKey}
                                             onChange={(e) => setLocalTmdbKey(e.target.value)}
-                                            className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                            className="w-full px-3 py-1.5 pr-10 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                             placeholder="TMDB API Key"
                                         />
                                         <button 
@@ -1080,7 +1080,7 @@ export const AIConfigPanel: React.FC = () => {
                                             {showTmdbKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                         </button>
                                     </div>
-                                    <div className="flex justify-between items-start mt-1">
+                                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mt-1">
                                         <div className="flex flex-col gap-1">
                                             <p className="text-xs text-theme-subtext flex items-center gap-1">
                                                 <Info className="w-3 h-3" />
@@ -1090,7 +1090,7 @@ export const AIConfigPanel: React.FC = () => {
                                                 {t('ai_config.get_tmdb_key')}
                                             </a>
                                         </div>
-                                        <button onClick={handleTestTmdb} disabled={isTmdbTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 ml-2">
+                                        <button onClick={handleTestTmdb} disabled={isTmdbTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 sm:ml-2">
                                             {isTmdbTesting ? 'Testing...' : t('ai_config.test_connection_btn')}
                                         </button>
                                     </div>
@@ -1106,7 +1106,7 @@ export const AIConfigPanel: React.FC = () => {
                                     type={showOmdbKey ? "text" : "password"} 
                                     value={localOmdbKey}
                                     onChange={(e) => setLocalOmdbKey(e.target.value)}
-                                    className="w-full px-4 py-2 pr-10 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
+                                    className="w-full px-3 py-1.5 pr-10 md:px-4 md:py-2 rounded-lg border bg-theme-bg border-theme-border text-theme-text focus:ring-2 focus:ring-theme-accent outline-none"
                                     placeholder="OMDB API Key"
                                 />
                                 <button 
@@ -1127,7 +1127,7 @@ export const AIConfigPanel: React.FC = () => {
                                         {t('ai_config.get_omdb_key', { defaultValue: "Get OMDB API Key" })}
                                     </a>
                                 </div>
-                                <button onClick={handleTestOmdb} disabled={isOmdbTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 ml-2">
+                                <button onClick={handleTestOmdb} disabled={isOmdbTesting} className="text-xs px-3 py-1.5 rounded border border-theme-accent text-theme-accent hover:bg-theme-accent hover:text-white transition-colors disabled:opacity-50 flex-shrink-0 sm:ml-2">
                                     {isOmdbTesting ? 'Testing...' : t('ai_config.test_connection_btn')}
                                 </button>
                             </div>

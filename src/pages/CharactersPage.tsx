@@ -62,7 +62,7 @@ export const CharactersPage: React.FC = () => {
   const sessionCount = (characterId: string) => sessions.filter(s => s.characterId === characterId).length;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-theme-text flex items-center gap-2">
@@ -105,7 +105,7 @@ export const CharactersPage: React.FC = () => {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4">
           {filtered.map((character, index) => {
             return (
               <motion.div
@@ -113,14 +113,14 @@ export const CharactersPage: React.FC = () => {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: Math.min(index * 0.05, 0.4), duration: 0.4 }}
-                className="group bg-theme-surface border-2 border-theme-border rounded-theme shadow-theme p-4 flex flex-col transition-all duration-300 hover:border-theme-accent md:hover:scale-[1.02] md:hover:shadow-2xl"
+                className="group bg-theme-surface border-2 border-theme-border rounded-theme shadow-theme p-3 md:p-4 flex flex-col transition-all duration-300 hover:border-theme-accent md:hover:scale-[1.02] md:hover:shadow-2xl"
               >
-                <div className="flex items-start gap-3">
-                  <div className="w-12 h-12 rounded-full bg-theme-accent text-theme-bg flex items-center justify-center text-xl font-bold flex-shrink-0">
+                <div className="flex items-start gap-2.5 md:gap-3">
+                  <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-theme-accent text-theme-bg flex items-center justify-center text-lg md:text-xl font-bold flex-shrink-0">
                     {character.name.slice(0, 1).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold text-theme-text truncate">{character.name}</h3>
+                    <h3 className="text-sm md:text-base font-semibold text-theme-text truncate">{character.name}</h3>
                     <p className="text-xs text-theme-subtext flex items-center gap-1 truncate">
                       <BookOpen className="w-3 h-3 flex-shrink-0" />
                       {character.sourceTitle}
@@ -133,15 +133,15 @@ export const CharactersPage: React.FC = () => {
                   )}
                 </div>
 
-                <div className="mt-auto pt-4 flex items-center justify-between gap-2">
+                <div className="mt-auto pt-2.5 md:pt-4 flex items-center justify-between gap-1.5 md:gap-2">
                   <span className="text-xs text-theme-subtext">
                     {t('characters.session_count', { count: sessionCount(character.id) })}
                     {character.corrections.length > 0 && ` · ${t('characters.correction_count', { count: character.corrections.length })}`}
                   </span>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-0.5 md:gap-1">
                     <button
                       onClick={() => navigate(`/characters/${character.id}`)}
-                      className="p-2 rounded-theme text-theme-accent hover:bg-theme-bg"
+                      className="p-1.5 md:p-2 rounded-theme text-theme-accent hover:bg-theme-bg"
                       title={t('characters.start_chat')}
                       aria-label={`${t('characters.start_chat')}: ${character.name}`}
                     >
@@ -149,7 +149,7 @@ export const CharactersPage: React.FC = () => {
                     </button>
                     <button
                       onClick={() => setConfirmDeleteId(character.id)}
-                      className="p-2 rounded-theme text-theme-subtext hover:text-theme-accent-warm hover:bg-theme-bg"
+                      className="p-1.5 md:p-2 rounded-theme text-theme-subtext hover:text-theme-accent-warm hover:bg-theme-bg"
                       title={t('common.delete')}
                       aria-label={`${t('common.delete')}: ${character.name}`}
                     >
@@ -157,7 +157,7 @@ export const CharactersPage: React.FC = () => {
                     </button>
                     <button
                       onClick={() => setDetailId(character.id)}
-                      className="p-2 rounded-theme text-theme-subtext hover:text-theme-text hover:bg-theme-bg"
+                      className="p-1.5 md:p-2 rounded-theme text-theme-subtext hover:text-theme-text hover:bg-theme-bg"
                       title={t('characters.view_profile')}
                       aria-label={`${t('characters.view_profile')}: ${character.name}`}
                     >

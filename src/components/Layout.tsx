@@ -11,6 +11,7 @@ import type { ChatMessage } from '../types/character';
 import { Navbar } from './Navbar';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
+import { useLocation } from 'react-router-dom';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -21,6 +22,11 @@ const isTauri = typeof window !== 'undefined' && (('__TAURI__' in window) || ('_
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { theme } = useThemeStore();
   const { t } = useTranslation();
+  const location = useLocation();
+  // The character chat is a full-height app-like page: it manages its own
+  // vertical budget, so the footer is dropped and main's vertical padding
+  // released to keep the message input pinned near the screen bottom.
+  const isChatPage = /^\/characters\/.+/.test(location.pathname);
   const [appVersion, setAppVersion] = useState('');
 
   // The footer version must reflect the built binary: getVersion() reads the
@@ -99,9 +105,19 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   }, []);
 
   return (
-    <div className="min-h-screen flex flex-col transition-colors duration-300 bg-theme-bg text-theme-text font-theme">
+    <div className={clsx(
+      'flex flex-col transition-colors duration-300 bg-theme-bg text-theme-text font-theme',
+      // The chat page is a fixed-height app layout: nav + chat + footer must
+      // sum to exactly the viewport, so the root must not grow with content.
+      isChatPage ? 'h-screen overflow-hidden' : 'min-h-screen'
+    )}>
       <Navbar />
-      <main className="flex-grow container mx-auto px-[3%] md:px-[5%] py-8">
+      <main className={clsx(
+        'flex-grow container mx-auto px-[3%] md:px-[5%]',
+        // min-h-0 lets the chat page cap at the viewport: its own flex-1
+        // wrapper then scrolls internally instead of pushing the footer down.
+        isChatPage ? 'py-0 flex flex-col min-h-0' : 'py-8'
+      )}>
         {children}
       </main>
       <footer className="py-8 mt-auto border-t transition-colors duration-300 bg-theme-surface border-theme-border text-theme-subtext">
