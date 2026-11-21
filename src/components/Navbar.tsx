@@ -15,7 +15,7 @@ export const Navbar: React.FC = () => {
   const [isLangOpen, setIsLangOpen] = React.useState(false);
   const themeDropdownRef = useRef<HTMLDivElement>(null);
   const langDropdownRef = useRef<HTMLDivElement>(null);
-  const { user, logout } = useAuthStore();
+  const { user } = useAuthStore();
   const { theme, setTheme } = useThemeStore();
   const [aiDate, setAiDate] = React.useState<string>('');
 
@@ -83,9 +83,9 @@ export const Navbar: React.FC = () => {
             <span className="font-bold text-xl tracking-tight text-theme-text font-theme">MediaTrove</span>
           </Link>
           {aiDate && (
-            <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-theme text-xs font-medium text-theme-subtext bg-theme-surface/50 max-w-[300px] truncate" title={aiDate}>
-              <Calendar className="w-3 h-3 flex-shrink-0" />
-              <span className="truncate">{aiDate}</span>
+            <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-theme text-sm font-medium text-theme-subtext bg-theme-surface/50" title={aiDate}>
+              <Calendar className="w-4 h-4 flex-shrink-0" />
+              <span>{aiDate}</span>
             </div>
           )}
           
@@ -174,14 +174,7 @@ export const Navbar: React.FC = () => {
                 )}
               </div>
 
-              {user ? (
-                 <button
-                  onClick={logout}
-                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap flex-shrink-0 text-red-500 hover:bg-red-500/10 transition-colors"
-                >
-                  {t('nav.sign_out')}
-                </button>
-              ) : (
+              {!user && (
                 <Link
                   to="/login"
                   className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap flex-shrink-0 transition-all shadow-sm bg-theme-accent text-theme-bg hover:bg-theme-accent-hover border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent"

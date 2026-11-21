@@ -72,13 +72,13 @@ export const CharactersPage: React.FC = () => {
           <p className="text-sm text-theme-subtext mt-1">{t('characters.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="relative">
+          <div className="relative flex-1 sm:flex-none">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-theme-subtext" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t('characters.search_placeholder')}
-              className="pl-9 pr-3 py-2 rounded-lg bg-theme-surface border border-theme-border text-sm text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent w-44"
+              className="pl-9 pr-3 py-2 rounded-lg bg-theme-surface border border-theme-border text-sm text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent w-full sm:w-44"
             />
           </div>
           <button
