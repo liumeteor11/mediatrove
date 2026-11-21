@@ -13,10 +13,11 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
 import {
-  DndContext, 
+  DndContext,
   closestCenter,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   DragEndEvent
@@ -32,6 +33,12 @@ import { CSS } from '@dnd-kit/utilities';
 
 // Helper to detect Tauri environment
 const isTauri = typeof window !== 'undefined' && (('__TAURI__' in window) || ('__TAURI_INTERNALS__' in window));
+
+// Long-press duration before a touch drag lifts (app-icon style). 600ms
+// matches mobile launcher conventions; raise it here if a slower hold
+// should be required. A quick swipe moves past the 8px tolerance long
+// before this elapses, so paging and reordering never fight.
+const LONG_PRESS_DELAY = 600;
 
 interface SortableItemProps {
     item: MediaItem;
@@ -107,9 +114,19 @@ export const CollectionPage: React.FC = () => {
   const detailOverlayRef = React.useRef<HTMLDivElement>(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
+    // Mouse-only drag for desktop pointers...
+    useSensor(MouseSensor, {
       activationConstraint: {
         distance: 8, // Require movement of 8px to start drag (prevents accidental drag on click)
+      },
+    }),
+    // ...and app-icon style long-press drag for touch: hold the card still
+    // (within the 8px tolerance) and the drag lifts; quick swipes never
+    // reach the delay and stay free for the swipe paging below.
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: LONG_PRESS_DELAY,
+        tolerance: 8,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -173,6 +190,30 @@ export const CollectionPage: React.FC = () => {
   const visibleCollection = isDesktop
     ? filteredCollection
     : filteredCollection.slice(safePage * MOBILE_PAGE_SIZE, (safePage + 1) * MOBILE_PAGE_SIZE);
+
+  // Touch swipe paging: a fast horizontal swipe on the grid flips pages
+  // (left = next, right = previous). Vertical scrolling and taps are
+  // unaffected — the direction test requires |dx| > 2|dy| and 64px of travel.
+  // Skipped while a long-press drag is active: releasing a reorder gesture
+  // must never also flip the page.
+  const gridTouchRef = React.useRef<{ x: number; y: number; t: number } | null>(null);
+  const dragActiveRef = React.useRef(false);
+  const handleGridTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    gridTouchRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+  };
+  const handleGridTouchEnd = (e: React.TouchEvent) => {
+    const start = gridTouchRef.current;
+    gridTouchRef.current = null;
+    if (!start || isDesktop || pageCount <= 1 || dragActiveRef.current) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    const dt = Date.now() - start.t;
+    if (dt > 800 || Math.abs(dx) < 64 || Math.abs(dx) < 2 * Math.abs(dy)) return;
+    if (dx < 0 && safePage < pageCount - 1) setPage(safePage + 1);
+    if (dx > 0 && safePage > 0) setPage(safePage - 1);
+  };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -719,18 +760,24 @@ export const CollectionPage: React.FC = () => {
         </div>
       ) : (
         isDraggable ? (
-          <DndContext 
-            sensors={sensors} 
-            collisionDetection={closestCenter} 
-            onDragEnd={handleDragEnd}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={() => { dragActiveRef.current = true; }}
+            onDragEnd={(event) => { dragActiveRef.current = false; handleDragEnd(event); }}
+            onDragCancel={() => { dragActiveRef.current = false; }}
           >
             <SortableContext
               items={visibleCollection.map(i => i.id)}
               strategy={rectSortingStrategy}
             >
-                <div className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
+                <div
+                  className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8"
+                  onTouchStart={handleGridTouchStart}
+                  onTouchEnd={handleGridTouchEnd}
+                >
                     {visibleCollection.map((item, index) => (
-                        <SortableItem 
+                        <SortableItem
                             key={item.id} 
                             item={item} 
                             onClick={() => {
@@ -755,7 +802,12 @@ export const CollectionPage: React.FC = () => {
             </SortableContext>
           </DndContext>
         ) : (
-            <motion.div layout className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8">
+            <motion.div
+              layout
+              className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-5 md:gap-x-6 md:gap-y-8"
+              onTouchStart={handleGridTouchStart}
+              onTouchEnd={handleGridTouchEnd}
+            >
                 <AnimatePresence>
                     {visibleCollection.map((item, index) => (
                         <MediaCard 
