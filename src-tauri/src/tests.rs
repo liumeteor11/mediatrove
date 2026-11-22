@@ -29,6 +29,7 @@ fn test_media_item_serialization() {
             released: Some(4),
         }]),
         poster_failed_at: Some(1700000000000),
+        poster_local_at: None,
         notification_enabled: None,
         last_checked_at: None,
         has_new_update: None,
@@ -380,6 +381,7 @@ fn make_db_item(id: &str, title: &str) -> crate::models::MediaItem {
         total_episodes: None,
         seasons: None,
         poster_failed_at: None,
+        poster_local_at: None,
         notification_enabled: None,
         last_checked_at: None,
         has_new_update: None,
@@ -994,4 +996,21 @@ fn test_update_user_password() {
     assert!(Argon2::default().verify_password(b"oldpass", &parsed).is_err());
 
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_should_overwrite_poster() {
+    use crate::database::should_overwrite_poster;
+    // Nothing cached locally: always take the peer's artwork.
+    assert!(should_overwrite_poster(None, Some(100), false));
+    assert!(should_overwrite_poster(Some(200), Some(100), false));
+    assert!(should_overwrite_poster(None, None, false));
+    // Local file exists: overwrite only when the peer cached strictly later.
+    assert!(should_overwrite_poster(Some(100), Some(200), true));
+    assert!(!should_overwrite_poster(Some(200), Some(100), true));
+    assert!(!should_overwrite_poster(Some(200), Some(200), true));
+    // Local without a timestamp: any peer timestamp wins.
+    assert!(should_overwrite_poster(None, Some(1), true));
+    // Legacy peer without timestamps: keep the old always-overwrite behavior.
+    assert!(should_overwrite_poster(Some(200), None, true));
 }

@@ -2210,7 +2210,7 @@ fn mcp_chat_reply(
 }
 
 #[command]
-async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, include_config: bool, db: State<'_, Arc<Database>>) -> Result<(), String> {
+async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, include_config: bool, db: State<'_, Arc<Database>>) -> Result<crate::database::MergeSummary, String> {
     let token = db.get_sync_token();
     if token.is_empty() {
         return Err("sync_token_not_set".to_string());
@@ -2241,17 +2241,40 @@ async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, inclu
     let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     let items: Vec<MediaItem> = serde_json::from_value(body.get("items").cloned().unwrap_or(serde_json::Value::Null))
         .map_err(|e| e.to_string())?;
-    db.merge_user_items(&username, items)?;
+    // Snapshot the local artwork vintage before the item merge: the cache
+    // files on disk correspond to the pre-merge item state, and the merge may
+    // replace the items (and their posterLocalAt) with the peer's versions.
+    let peer_ats: std::collections::HashMap<String, u64> = items.iter().filter_map(|i| {
+        i.poster_local_at.map(|at| (i.id.clone(), at))
+    }).collect();
+    let incoming_ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    let local_ats: std::collections::HashMap<String, u64> = db
+        .get_items_poster_local_at(&username, &incoming_ids)
+        .into_iter()
+        .collect();
+    let summary = db.merge_user_items(&username, items)?;
 
     // Poster files travel with the metadata so the receiving device renders
     // them offline and survives URL decay. A peer that predates poster sync
-    // simply omits the map.
+    // simply omits the map. Files are replaced only when the peer demonstrably
+    // cached the artwork later (or nothing local exists): rendering prefers
+    // the local file over the remote URL, so a blindly overwritten stale file
+    // would keep masking a newer posterUrl.
     if let Some(posters) = body.get("posters").and_then(|v| v.as_object()) {
         let mut saved = 0usize;
         for (id, uri) in posters {
             if let Some(data_uri) = uri.as_str() {
-                if db.save_poster_data(id, data_uri).is_ok() {
+                let has_local = db.poster_file_exists(id);
+                let peer_at = peer_ats.get(id).copied();
+                if crate::database::should_overwrite_poster(local_ats.get(id).copied(), peer_at, has_local)
+                    && db.save_poster_data(id, data_uri).is_ok()
+                {
                     saved += 1;
+                    if let Some(at) = peer_at {
+                        // Bookkeeping only — a failed timestamp write must not
+                        // fail the sync after the items already merged.
+                        let _ = db.set_poster_local_at_if_newer(&username, id, at);
+                    }
                 }
             }
         }
@@ -2290,7 +2313,7 @@ async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, inclu
             }
         }
     }
-    Ok(())
+    Ok(summary)
 }
 
 #[command]

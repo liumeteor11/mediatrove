@@ -370,11 +370,11 @@ async fn receive_data(headers: HeaderMap, State(state): State<SyncState>, Json(p
     let items: Vec<crate::models::MediaItem> = serde_json::from_value(
         payload.get("items").cloned().unwrap_or(serde_json::Value::Null)
     ).map_err(|_| StatusCode::BAD_REQUEST)?;
-    state.db.merge_user_items(&username, items).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let summary = state.db.merge_user_items(&username, items).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Some(notify) = &state.notify {
         notify(&username, "sync");
     }
-    Ok(Json(serde_json::json!({"ok": true})))
+    Ok(Json(serde_json::json!({"ok": true, "added": summary.added, "updated": summary.updated})))
 }
 
 /// QR payload handed back to the desktop frontend for rendering; the phone

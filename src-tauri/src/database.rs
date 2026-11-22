@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use base64::Engine as _;
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri::Manager;
 use crate::models::{MediaItem, DistilledCharacter, ChatSession, CollectionData, UserRecord, AIConfig, ThemeConfig, McpConfig};
@@ -9,6 +10,31 @@ use std::sync::Mutex;
 pub struct Database {
     path: PathBuf,
     cache: Mutex<CollectionData>,
+}
+
+/// Outcome of merging a peer's items, surfaced to the user after a sync.
+/// `updated` counts whole-item replacements where the peer's edit was strictly
+/// newer — those are the merges that can discard local field-level changes.
+#[derive(Debug, Clone, Serialize)]
+pub struct MergeSummary {
+    pub added: u64,
+    pub updated: u64,
+}
+
+/// Whether an incoming synced poster file may replace the local cache copy.
+/// Rendering priority is custom poster > local file > remote URL, so a stale
+/// local file would keep masking a newer remote URL; overwrite only when the
+/// peer demonstrably cached the artwork later (or we have nothing yet).
+/// A peer that predates poster timestamps (peer_at = None) keeps the old
+/// always-overwrite behavior so older app versions still propagate artwork.
+pub fn should_overwrite_poster(local_at: Option<u64>, peer_at: Option<u64>, has_local_file: bool) -> bool {
+    if !has_local_file {
+        return true;
+    }
+    match peer_at {
+        None => true,
+        Some(peer) => peer > local_at.unwrap_or(0),
+    }
 }
 
 impl Database {
@@ -130,10 +156,11 @@ impl Database {
     /// Merge remote collection items for a single user.
     /// Users, configs, and sync tokens are intentionally not merged: LAN sync is
     /// scoped to collection data, not credentials or settings.
-    pub fn merge_user_items(&self, username: &str, incoming_items: Vec<MediaItem>) -> Result<(), String> {
+    pub fn merge_user_items(&self, username: &str, incoming_items: Vec<MediaItem>) -> Result<MergeSummary, String> {
         let mut data = self.cache.lock().map_err(|e| e.to_string())?;
 
         let local_items = data.items_by_user.entry(username.to_string()).or_default();
+        let mut summary = MergeSummary { added: 0, updated: 0 };
         for item in incoming_items {
             if let Some(existing_idx) = local_items.iter().position(|i| i.id == item.id) {
                 let existing = &local_items[existing_idx];
@@ -141,14 +168,17 @@ impl Database {
                 let existing_ts = existing.last_edited_at.unwrap_or(0);
                 if incoming_ts > existing_ts {
                     local_items[existing_idx] = item;
+                    summary.updated += 1;
                 }
             } else {
                 local_items.push(item);
+                summary.added += 1;
             }
         }
 
         drop(data);
-        self.save()
+        self.save()?;
+        Ok(summary)
     }
 
     pub fn get_sync_token(&self) -> String {
@@ -416,6 +446,43 @@ impl Database {
         let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
         let mime = sniff_mime(&bytes).to_string();
         Ok(Some((bytes, mime)))
+    }
+
+    /// Whether a local cache file exists for the item id (existence check only,
+    /// no bytes read).
+    pub fn poster_file_exists(&self, id: &str) -> bool {
+        let id = sanitize_poster_id(id);
+        if id.is_empty() { return false; }
+        self.posters_dir().join(format!("{id}.img")).exists()
+    }
+
+    /// Pre-merge snapshot of the local artwork vintage for the given item ids.
+    /// The poster files on disk correspond to the pre-merge item state, so the
+    /// overwrite comparison must read this before `merge_user_items` applies
+    /// the peer's item versions (which carry the peer's posterLocalAt).
+    pub fn get_items_poster_local_at(&self, username: &str, ids: &[String]) -> Vec<(String, u64)> {
+        let Ok(data) = self.cache.lock() else { return Vec::new() };
+        let Some(items) = data.items_by_user.get(username) else { return Vec::new() };
+        items.iter()
+            .filter(|i| ids.contains(&i.id))
+            .filter_map(|i| i.poster_local_at.map(|at| (i.id.clone(), at)))
+            .collect()
+    }
+
+    /// Record the artwork vintage of the local cache file, but never step
+    /// backwards: the stored timestamp must always describe the newest file
+    /// this device has had for the item.
+    pub fn set_poster_local_at_if_newer(&self, username: &str, id: &str, at: u64) -> Result<(), String> {
+        let mut data = self.cache.lock().map_err(|e| e.to_string())?;
+        if let Some(items) = data.items_by_user.get_mut(username) {
+            if let Some(item) = items.iter_mut().find(|i| i.id == id) {
+                if item.poster_local_at.unwrap_or(0) < at {
+                    item.poster_local_at = Some(at);
+                }
+            }
+        }
+        drop(data);
+        self.save()
     }
 
     /// Posters for every item the user owns, as `id → data URI`. The sync

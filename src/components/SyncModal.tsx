@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toDataURL as qrToDataURL } from 'qrcode';
 import { ChevronDown, QrCode, X } from 'lucide-react';
+import { toast } from 'react-toastify';
 import { useAuthStore } from '../store/useAuthStore';
 import { useAIStore } from '../store/useAIStore';
 import { useThemeStore } from '../store/useThemeStore';
@@ -164,7 +165,11 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
         setStatus(t('sync.syncing_with', { name: peer.name }));
         try {
             const username = useAuthStore.getState().user?.username || 'guest';
-            await invoke('sync_with_peer', { peerIp: peer.ip, peerPort: peer.port, username, includeConfig: includeConfig });
+            // Merge counts come back from the backend so the user can see what
+            // the sync actually did: additions merge cleanly, but an update
+            // means the peer's newer edit replaced the local item whole —
+            // field-level changes made on this device are lost in that case.
+            const summary = await invoke<{ added: number; updated: number }>('sync_with_peer', { peerIp: peer.ip, peerPort: peer.port, username, includeConfig: includeConfig });
             if (includeConfig) {
                 // The synced config now lives in the backend, but the webview
                 // stores treat localStorage as the source of truth on reload —
@@ -178,9 +183,12 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
                 }
             }
             setStatus(t('sync.sync_completed'));
+            toast.success(t('sync.merge_summary', { added: summary.added, updated: summary.updated }));
+            // Give the merge summary toast time to be read before the reload
+            // wipes it.
             setTimeout(() => {
                 window.location.reload();
-            }, 1000);
+            }, 3000);
         } catch (e) {
             const msg = String(e);
             setStatus(msg.includes('sync_auth_failed')
