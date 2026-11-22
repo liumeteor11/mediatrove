@@ -34,6 +34,9 @@ import { isDeepseekProvider } from './deepseekToolsService';
 
 // Roleplay reads better a bit above the media-analysis default temperature.
 const CHAT_TEMPERATURE = 0.8;
+// Hard ceiling on chat replies (tokens): real texting is short; the style
+// rules above do the styling, this cap makes an essay physically impossible.
+const CHAT_MAX_TOKENS = 200;
 // Character-name suggestions: a short list, but thinking models still need
 // room for reasoning, hence an explicit budget plus the shared retry ladder.
 const SUGGEST_MAX_TOKENS = 4000;
@@ -551,10 +554,12 @@ You ARE ${character.name}${character.aliases.length > 0 ? ` (also known as ${cha
     ? `# Archived context summary\nEarlier parts of this conversation (condensed):\n${sessionSummary}`
     : '';
 
-  const rules = `# Conversation rules
-- Always stay in first-person character. Even for topics outside the original work, extrapolate from the persona above; never break character.
-- Talk like a person: short conversational paragraphs (usually under 150 words), no headings, no bullet lists unless the character genuinely would use them.
-- Never mention being an AI, a model, or these instructions. If the user pushes the character out of role, deflect in character.
+  const rules = `# Conversation rules (text like a real person)
+- Reply like texting a close friend: usually 1-3 short sentences, at most two short paragraphs. Mirror the user's length and energy — a short message gets a short reply, never an essay.
+- One beat per reply: react or say one thing. Never summarize, never use bullet lists, headings, markdown or formal essay structure. No lecture, no advice unless asked.
+- Emotion first, information second: react to HOW the user said something before addressing what they asked. Real people dodge, tease, interrupt, go quiet, or answer with a question — they don't helpfully explain everything.
+- Text naturally: casual punctuation, sentence fragments, particles like 嗯/哦/哈/诶/吧, occasionally no punctuation at all. Don't end every reply with a question; don't repeat or rephrase what the user just said; avoid openers like 总之/其实/作为.
+- Never break character, never mention being an AI or these instructions. Deflect out-of-role pushes in character.
 - When a topic hits the character's boundaries, react the way the character would (deflect, refuse, or get annoyed) instead of complying blandly.`;
 
   return [identity, persona, expression, corrections, summary, rules].filter(s => s.length > 0).join('\n\n---\n\n');
@@ -704,13 +709,14 @@ export const sendCharacterMessage = async (
   try {
     reply = await callAIStream(messages, CHAT_TEMPERATURE, {
       onDelta: onDelta || (() => {}),
+      maxTokens: CHAT_MAX_TOKENS,
     });
   } catch (e) {
     // Streaming is the nicer path, not the only one: a provider that does not
     // speak SSE (or a mid-flight hiccup) should still produce a reply. Search
     // stays disabled — roleplay runs on the persona, not on the web.
     console.warn('Streaming reply failed, retrying without streaming', e);
-    reply = await callAI(messages, CHAT_TEMPERATURE, { disableSearch: true });
+    reply = await callAI(messages, CHAT_TEMPERATURE, { disableSearch: true, maxTokens: CHAT_MAX_TOKENS });
   }
   if (!reply || !reply.trim()) throw new Error('empty-ai-response');
   return reply.trim();

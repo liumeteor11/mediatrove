@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use base64::Engine as _;
 use tauri::AppHandle;
 use tauri::Manager;
 use crate::models::{MediaItem, DistilledCharacter, ChatSession, CollectionData, UserRecord, AIConfig, ThemeConfig, McpConfig};
@@ -382,5 +383,70 @@ impl Database {
         }
         drop(data);
         self.save()
+    }
+
+    fn posters_dir(&self) -> PathBuf {
+        self.path.parent().map(|p| p.join("posters")).unwrap_or_else(|| PathBuf::from("posters"))
+    }
+
+    /// Local poster cache: one file per item id, bytes sniffed for the mime on
+    /// read so the webview can render them as data URIs without network.
+    pub fn save_poster_data(&self, id: &str, data_uri: &str) -> Result<(), String> {
+        let id = sanitize_poster_id(id);
+        if id.is_empty() { return Err("INVALID_POSTER_ID".to_string()); }
+        let (mime, b64) = data_uri
+            .strip_prefix("data:")
+            .and_then(|rest| rest.split_once(";base64,"))
+            .ok_or("INVALID_DATA_URI")?;
+        if !mime.starts_with("image/") { return Err("INVALID_DATA_URI".to_string()); }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() < 256 { return Err("POSTER_TOO_SMALL".to_string()); }
+        let dir = self.posters_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(format!("{id}.img")), bytes).map_err(|e| e.to_string())
+    }
+
+    pub fn read_poster_file(&self, id: &str) -> Result<Option<(Vec<u8>, String)>, String> {
+        let id = sanitize_poster_id(id);
+        if id.is_empty() { return Ok(None); }
+        let file = self.posters_dir().join(format!("{id}.img"));
+        if !file.exists() { return Ok(None); }
+        let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+        let mime = sniff_mime(&bytes).to_string();
+        Ok(Some((bytes, mime)))
+    }
+
+    /// Posters for every item the user owns, as `id → data URI`. The sync
+    /// endpoint embeds this in its payload so peers receive the actual images,
+    /// not just the (possibly decayed or unreachable) remote URLs.
+    pub fn get_poster_b64_map(&self, username: &str) -> Result<Vec<(String, String)>, String> {
+        use base64::Engine as _;
+        let mut out = Vec::new();
+        for item in self.get_user_items(username)? {
+            if let Some((bytes, mime)) = self.read_poster_file(&item.id)? {
+                out.push((item.id, format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))));
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn sanitize_poster_id(id: &str) -> String {
+    id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect()
+}
+
+pub fn sniff_mime(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else if bytes.starts_with(b"GIF8") {
+        "image/gif"
+    } else {
+        "image/jpeg"
     }
 }

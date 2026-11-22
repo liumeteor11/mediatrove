@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import { toast } from 'react-toastify';
 import { checkUpdates, repairMediaItem, FALLBACK_POSTER, isPlaceholderPosterUrl } from '../services/aiService';
+import { getLocalPoster } from '../services/posterService';
 
 // Episode-grid helpers. The app's progress convention is "the last number in
 // the string is the episode counter" for flat progress ("E30", "第 680 话"),
@@ -183,10 +184,25 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   const imgRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
-    setImgSrc(normalizeImgSrc(item.customPosterUrl || item.posterUrl) || fallbackPoster);
-    setImgLoading(true);
-    setImgFailed(false);
-  }, [item.customPosterUrl, item.posterUrl]);
+    let cancelled = false;
+    (async () => {
+      // customPosterUrl is the user's explicit choice; the local cache wins
+      // over the remote posterUrl (URL decay / censored networks / offline).
+      if (item.customPosterUrl) {
+        setImgSrc(normalizeImgSrc(item.customPosterUrl) || fallbackPoster);
+        return;
+      }
+      const local = await getLocalPoster(item.id);
+      if (cancelled) return;
+      if (local) {
+        setImgSrc(local);
+        return;
+      }
+      setImgSrc(normalizeImgSrc(item.posterUrl) || fallbackPoster);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id, item.customPosterUrl, item.posterUrl, item.posterLocalAt]);
 
   // A cached image can be fully loaded before React attaches onLoad, which
   // would leave the poster hidden behind the loading state forever.
@@ -199,17 +215,24 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   }, [imgSrc]);
 
   const handleImageError = () => {
-      setImgSrc(FALLBACK_POSTER);
-      setImgFailed(true);
-      setImgLoading(false);
-      // A poster that fails to load at runtime (expired CDN link, dead host,
-      // new hotlink protection) still looks intact to the repair logic, which
-      // only recognizes placeholders. Record the failure once so the repair
-      // sweeps and the card's refresh button re-fetch it; onLoad clears the
-      // flag again as soon as an image renders.
-      if (item.posterUrl && !item.customPosterUrl && !isPlaceholderPosterUrl(item.posterUrl) && !item.posterFailedAt) {
-          updateItem(item.id, { posterFailedAt: Date.now() });
-      }
+      // Remote poster failed (expired CDN link, dead host, censored network):
+      // a local cached copy outranks the fallback — only mark the failure
+      // (which drives the repair sweeps) when there is no local copy either.
+      getLocalPoster(item.id).then((local) => {
+          if (local) {
+              setImgSrc(local);
+              setImgFailed(false);
+              setImgLoading(false);
+              if (item.posterFailedAt) updateItem(item.id, { posterFailedAt: undefined });
+              return;
+          }
+          setImgSrc(FALLBACK_POSTER);
+          setImgFailed(true);
+          setImgLoading(false);
+          if (item.posterUrl && !item.customPosterUrl && !isPlaceholderPosterUrl(item.posterUrl) && !item.posterFailedAt) {
+              updateItem(item.id, { posterFailedAt: Date.now() });
+          }
+      });
   };
 
   const handleImageLoad = () => {

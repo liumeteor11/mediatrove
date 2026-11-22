@@ -326,6 +326,19 @@ async fn get_data(headers: HeaderMap, State(state): State<SyncState>, axum::extr
     // pairing code instead of plaintext JSON. Absent for old clients that
     // never ask for it.
     let mut body = serde_json::json!({ "items": items });
+
+    // Local poster files ride along with the metadata: covers are cached
+    // images (not URLs) so the receiving device renders them offline and
+    // survives URL decay. Movie covers are public data, no encryption needed.
+    if let Ok(poster_map) = state.db.get_poster_b64_map(&username) {
+        if !poster_map.is_empty() {
+            let map: serde_json::Map<String, serde_json::Value> = poster_map
+                .into_iter()
+                .map(|(id, uri)| (id, serde_json::Value::String(uri)))
+                .collect();
+            body["posters"] = serde_json::Value::Object(map);
+        }
+    }
     if params.get("include").map(|v| v == "config").unwrap_or(false) {
         let token = state.db.get_sync_token();
         let characters = state.db.get_characters_for_user(&username).unwrap_or_default();

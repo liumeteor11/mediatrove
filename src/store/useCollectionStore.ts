@@ -1,10 +1,12 @@
 import { create } from 'zustand';
 import { MediaItem, CollectionCategory } from '../types/types';
 import { fetchCover } from '../services/coverService';
+import { isPlaceholderPosterUrl } from '../services/aiService';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore } from './useAuthStore';
 import { v4 as uuidv4 } from 'uuid';
 import { parseUpdateProgress, compareUpdateProgress } from '../services/updateGuard';
+import { sweepPosterCache, cachePoster } from '../services/posterService';
 
 const isTauri = typeof window !== 'undefined' && (('__TAURI__' in window) || ('__TAURI_INTERNALS__' in window));
 
@@ -49,7 +51,11 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
                 return;
             }
             const items = await invoke<MediaItem[]>('get_collection', { username });
-            set({ collection: stripLegacyPlaceholders(items), initialized: true, isLoading: false });
+            const loaded = stripLegacyPlaceholders(items);
+            set({ collection: loaded, initialized: true, isLoading: false });
+            // Backfill the local poster cache in the background (desktop has
+            // the proxy; synced devices get the files from their peer).
+            sweepPosterCache(loaded, (id, u) => get().updateItem(id, u));
         } else {
             // Fallback to localStorage for Web Mode
             const saved = localStorage.getItem('media-tracker-collection');
@@ -279,6 +285,15 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
             // bumped item (or its parent folder) is stored at the front as well.
             invoke('save_item', { username, item: newItem })
                 .then(() => invoke('reorder_collection', { username, ids: updatedCollection.map(i => i.id) }))
+                // Cache-at-track: the poster lands in the local store while the
+                // network (and its proxy) is available, then travels with sync.
+                .then(() => {
+                    if (newItem.posterUrl && !newItem.customPosterUrl && !isPlaceholderPosterUrl(newItem.posterUrl)) {
+                        return cachePoster(newItem.id, newItem.posterUrl).then((ok) => {
+                            if (ok) get().updateItem(newItem.id, { posterLocalAt: Date.now() });
+                        });
+                    }
+                })
                 .catch(console.error);
         } else {
             localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));

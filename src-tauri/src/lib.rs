@@ -5,7 +5,7 @@ use serde_json::Value;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::error::Error;
-use database::Database;
+use database::{sniff_mime, Database};
 use models::{MediaItem, DistilledCharacter, ChatSession, UserPublic, UserRecord, AIConfig, ThemeConfig};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -1925,6 +1925,72 @@ fn migrate_guest_data(username: String, db: State<Arc<Database>>) -> Result<usiz
     db.migrate_guest_data(u)
 }
 
+/// Download a poster into the local cache (app_data/posters/{id}.img). The
+/// proxy client goes first (TMDB is unreachable from some networks), the
+/// direct client follows for sources that don't need one. Images smaller
+/// than a real poster are rejected so error pages never get cached.
+#[tauri::command]
+async fn cache_poster(
+    id: String,
+    url: String,
+    state: State<'_, AppState>,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), String> {
+    let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    if id.is_empty() { return Err("INVALID_POSTER_ID".to_string()); }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("INVALID_POSTER_URL".to_string());
+    }
+
+    let mut last_err = "POSTER_FETCH_FAILED".to_string();
+    for client in [&state.proxy_client, &state.direct_client] {
+        let outcome = client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await;
+        match outcome {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(bytes) if bytes.len() > 512 => {
+                    let mime = sniff_mime(&bytes);
+                    let data_uri = format!("data:{mime};base64,{}", BASE64_STANDARD.encode(&bytes));
+                    db.save_poster_data(&id, &data_uri)?;
+                    return Ok(());
+                }
+                Ok(_) => { last_err = "POSTER_TOO_SMALL".to_string(); }
+                Err(e) => { last_err = e.to_string(); }
+            },
+            Ok(resp) => { last_err = format!("POSTER_HTTP_{}", resp.status().as_u16()); }
+            Err(e) => { last_err = e.to_string(); }
+        }
+    }
+    Err(last_err)
+}
+
+#[derive(serde::Serialize)]
+struct PosterPayload {
+    b64: String,
+    mime: String,
+}
+
+#[tauri::command]
+fn get_poster_base64(id: String, db: State<Arc<Database>>) -> Result<Option<PosterPayload>, String> {
+    let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    match db.read_poster_file(&id)? {
+        Some((bytes, mime)) => Ok(Some(PosterPayload {
+            b64: BASE64_STANDARD.encode(bytes),
+            mime,
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Persists a synced poster (data URI from the peer's /sync/data payload).
+#[tauri::command]
+fn save_poster_data(id: String, data_uri: String, db: State<Arc<Database>>) -> Result<(), String> {
+    db.save_poster_data(&id, &data_uri)
+}
+
 /// Local forgot-password recovery. Accounts only exist on the device that
 /// created them (users live in the local collection.json next to the data),
 /// so there is no server to email a reset link — a reset simply re-hashes the
@@ -2177,6 +2243,23 @@ async fn sync_with_peer(peer_ip: String, peer_port: u16, username: String, inclu
         .map_err(|e| e.to_string())?;
     db.merge_user_items(&username, items)?;
 
+    // Poster files travel with the metadata so the receiving device renders
+    // them offline and survives URL decay. A peer that predates poster sync
+    // simply omits the map.
+    if let Some(posters) = body.get("posters").and_then(|v| v.as_object()) {
+        let mut saved = 0usize;
+        for (id, uri) in posters {
+            if let Some(data_uri) = uri.as_str() {
+                if db.save_poster_data(id, data_uri).is_ok() {
+                    saved += 1;
+                }
+            }
+        }
+        if saved > 0 {
+            eprintln!("sync: stored {saved} poster files from peer");
+        }
+    }
+
     // Optional encrypted profile (characters, chats, app config). The peer
     // sends it only when asked and only in the agreed pairing-code encoding;
     // decrypt fully before applying anything so a failure leaves local data
@@ -2329,6 +2412,9 @@ pub fn run() {
             login_user,
             reset_user_password,
             migrate_guest_data,
+            cache_poster,
+            get_poster_base64,
+            save_poster_data,
             get_sync_token,
             set_sync_token,
             start_sync_server,

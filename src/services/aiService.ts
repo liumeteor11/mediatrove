@@ -2230,9 +2230,9 @@ const normalizeMediaItem = (item: any): any => {
 export const callAIStream = async (
     messages: any[],
     temperature: number = 0.7,
-    options: { onDelta: (text: string) => void; configOverride?: { baseURL?: string; apiKey?: string; model?: string; provider?: AIProvider } } = { onDelta: () => {} }
+    options: { onDelta: (text: string) => void; configOverride?: { baseURL?: string; apiKey?: string; model?: string; provider?: AIProvider }; maxTokens?: number } = { onDelta: () => {} }
 ): Promise<string> => {
-    const { onDelta } = options;
+    const { onDelta, maxTokens } = options;
     const state = useAIStore.getState();
     const override = options.configOverride || {};
     const effProvider: AIProvider = (override.provider as AIProvider) ?? (state.provider as AIProvider);
@@ -2351,7 +2351,7 @@ export const callAIStream = async (
                     await invoke('ai_chat_stream', {
                         messages,
                         temperature: effTemperature,
-                        extra_body: {},
+                        extra_body: maxTokens ? { max_tokens: maxTokens } : {},
                         config: rustConfig,
                         on_event: channel
                     });
@@ -2368,6 +2368,7 @@ export const callAIStream = async (
                         model: model || "gpt-5.6-terra",
                         messages,
                         temperature: effTemperature,
+                        max_tokens: maxTokens,
                         stream: true
                     } as any);
                     for await (const chunk of stream as any) {
