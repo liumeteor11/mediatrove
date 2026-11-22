@@ -164,9 +164,15 @@ export const CollectionPage: React.FC = () => {
 
     if (searchTerm) {
         const lower = searchTerm.toLowerCase();
-        base = base.filter((item) =>
-            item.title.toLowerCase().includes(lower)
-        );
+        // Search beyond the title: an actor or director name is a natural way
+        // to look for a tracked work ("emily dickinson" → Dickinson), and the
+        // metadata is already on the item.
+        base = base.filter((item) => {
+            const castText = Array.isArray(item.cast) ? item.cast.join(' ') : '';
+            return `${item.title} ${castText} ${item.directorOrAuthor || ''}`
+                .toLowerCase()
+                .includes(lower);
+        });
     }
 
     const indexMap = new Map(collection.map((item, idx) => [item.id, idx]));

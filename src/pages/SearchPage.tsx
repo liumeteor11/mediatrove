@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw, Info } from 'lucide-react';
 import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
+import { recordLearnedAlias } from '../services/learnedAlias';
 import { MediaItem, CollectionCategory, MediaType } from '../types/types';
 import { MediaCard } from '../components/MediaCard';
 import { useCollectionStore } from '../store/useCollectionStore';
@@ -495,6 +496,10 @@ export const SearchPage: React.FC = () => {
 
   const onAddToCollection = (item: MediaItem, category: CollectionCategory) => {
     addToCollection(item, category);
+    // The explicit add confirms this query resolves to this work — record it
+    // so the next identical search hits the structured sources directly
+    // (empty query = trending adds, nothing to learn from).
+    recordLearnedAlias(query, item.title);
     toast.success(t('search_page.added_to_collection', { title: item.title, category }));
   };
 

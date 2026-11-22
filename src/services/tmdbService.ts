@@ -94,6 +94,20 @@ export const getTMDBSeasonPoster = async (id: number, season: number, language: 
 const TMDB_DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const tmdbDetailsMemCache = new Map<string, { ts: number; data: any }>();
 
+// The work entries embedded in a person result's known_for list
+// (/search/multi person hits carry their most notable works inline).
+export interface TMDBKnownFor {
+  id: number;
+  title?: string;
+  name?: string;
+  overview?: string;
+  poster_path: string | null;
+  release_date?: string;
+  first_air_date?: string;
+  media_type: 'movie' | 'tv' | 'person';
+  vote_average: number;
+}
+
 export interface TMDBMedia {
   id: number;
   title?: string;
@@ -106,6 +120,7 @@ export interface TMDBMedia {
   media_type: 'movie' | 'tv' | 'person';
   genre_ids: number[];
   vote_average: number;
+  known_for?: TMDBKnownFor[];
 }
 
 export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' = 'multi', language: string = tmdbLanguageFromUI()): Promise<TMDBMedia[]> => {

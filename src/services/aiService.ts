@@ -12,6 +12,8 @@ import type { AIProvider, TrendingMode } from '../store/useAIStore';
 import { buildRequestExtras, getModelCapabilities, getNativeSearchTools, ReasoningLevel } from './modelCatalog';
 import { buildUpdatePatch, UpdateCandidate, SafeUpdate } from './updateGuard';
 import { getWikiContext } from './wikiService';
+import { getLearnedAlias } from './learnedAlias';
+import { getCachedRewrite, cacheRewrite, parseRewriteTerms } from './queryRewrite';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from 'react-toastify';
 
@@ -141,15 +143,29 @@ const resolveTauriSearchProviderList = (input: {
 };
 
 const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit & { timeoutMs?: number } = {}) => {
-  const ms = init.timeoutMs ?? 10000;
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort('timeout'), ms);
-  try {
-    const res = await fetch(input, { ...init, signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(id);
-  }
+    const ms = init.timeoutMs ?? 10000;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort('timeout'), ms);
+    try {
+        const res = await fetch(input, { ...init, signal: controller.signal });
+        return res;
+    } finally {
+        clearTimeout(id);
+    }
+};
+
+// Bounds any awaitable — used for the query-rewrite call, which is a
+// best-effort accelerator: a slow model must not hold the whole search
+// hostage past the main AI round's own latency.
+const REWRITE_TIMEOUT_MS = 4000;
+const withTimeout = async <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<T>(resolve => { timer = setTimeout(() => resolve(fallback), ms); });
+    try {
+        return await Promise.race([p, timeout]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
 };
 
 const searchCache = new Map<string, { ts: number; data: any }>();
@@ -2550,6 +2566,13 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   // search terms) follows the query language — the UI language only matters
   // where there is no query (trending, background refreshes).
   const isChinese = queryLang === 'zh';
+  // Date anchor for relative-time resolution ("10 years ago"): without it the
+  // model guesses the current date from its training cutoff.
+  const todayAnchor = (() => {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  })();
   const enableBangumi = useAIStore.getState().enableBangumi;
 
   // Parallel Execution: TMDB, Bangumi, Plugins, and AI Search Context
@@ -2585,6 +2608,12 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       )
     : Promise.resolve([]);
 
+  // A learned alias (recorded when the user explicitly collected the work a
+  // previous search surfaced for this query) is searched alongside the raw
+  // query. Its results lead the merge, and an alias hit counts as an exact
+  // base match so the AI association round-trip is skipped on repeat searches.
+  let learnedAliasTitle = '';
+
   const [tmdbRes, bangumiRes, pluginRes] = await Promise.all([
     timed(
       'TMDB 搜索',
@@ -2592,6 +2621,16 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       async () => {
         if (!type || type === 'All' || type === MediaType.MOVIE || type === MediaType.TV_SERIES) {
           const t = (type === MediaType.MOVIE) ? 'movie' : (type === MediaType.TV_SERIES) ? 'tv' : 'multi';
+          learnedAliasTitle = getLearnedAlias(q);
+          if (learnedAliasTitle && learnedAliasTitle.toLowerCase() !== q.toLowerCase()) {
+            const [primary, aliasRes] = await Promise.all([
+              searchTMDB(q, t as any, tmdbLanguageFromQuery(q)),
+              searchTMDB(learnedAliasTitle, t as any, tmdbLanguageFromQuery(learnedAliasTitle))
+            ]);
+            // Alias first: baseUnique dedupe keeps the first occurrence, so
+            // the human-confirmed title wins ties against the raw query.
+            return [...aliasRes, ...primary];
+          }
           return await searchTMDB(q, t as any, tmdbLanguageFromQuery(q));
         }
         return [];
@@ -2649,13 +2688,11 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       };
   });
 
-  // Convert TMDB Results
-  const tmdbItems: MediaItem[] = tmdbRes
-    .filter((item: any) => item.media_type !== 'person')
-    .map((item: any) => ({
+  // Convert TMDB Results (shared with the query-rewrite second round below)
+  const toMediaItemFromTMDB = (item: any): MediaItem => ({
       id: uuidv4(),
       title: item.title || item.name || query,
-      directorOrAuthor: "", 
+      directorOrAuthor: "",
       description: item.overview || "",
       releaseDate: item.release_date || item.first_air_date || "",
       type: item.media_type === 'movie' ? MediaType.MOVIE : MediaType.TV_SERIES,
@@ -2666,7 +2703,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       rating: item.vote_average ? `${item.vote_average.toFixed(1)}/10` : undefined,
       status: 'To Watch',
       addedAt: new Date().toISOString()
-  }));
+  }) as MediaItem;
+  const tmdbItems: MediaItem[] = tmdbRes
+    .filter((item: any) => item.media_type !== 'person')
+    .map(toMediaItemFromTMDB);
 
   // Convert Bangumi Results
   const bangumiItems: MediaItem[] = bangumiRes.map((item: any) => {
@@ -2730,7 +2770,15 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
     return 0;
   };
   const baseScores = Array.from(baseUnique.values()).map(it => relevanceScore(it.title));
-  const hasExactBaseMatch = baseScores.some(s => s === 100);
+  // An alias hit survives TMDB returning alternate titles ("Marvel's Agents
+  // of S.H.I.E.L.D." for a recorded "Agents of S.H.I.E.L.D."), so match by
+  // bidirectional containment instead of exact title equality.
+  const aliasHit = !!learnedAliasTitle && Array.from(baseUnique.values()).some(it => {
+    const t = normalizeKey(it.title);
+    const a = normalizeKey(learnedAliasTitle);
+    return !!t && !!a && (t.includes(a) || a.includes(t));
+  });
+  const hasExactBaseMatch = baseScores.some(s => s === 100) || aliasHit;
   // Seasonal works (TV series etc.): detect via the type filter, season/episode
   // wording in the query, or a strong TV hit in the base results. These always
   // consult the AI so the newest season gets surfaced even on an exact match.
@@ -2743,13 +2791,127 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   // title-relevant hits (previously any 8+ results suppressed the AI call,
   // which let fuzzy matches bury the real one).
   const shouldUseAI = isSeriesTarget || (!hasExactBaseMatch && !(baseScores.filter(s => s >= 90).length >= 4));
+  let aiNeeded = shouldUseAI;
+
+  // AI query rewrite for "hard" queries: when the AI is about to be consulted
+  // anyway and the structured sources found nothing title-relevant (acronyms,
+  // loose descriptions, actor names), a short no-search AI call maps the
+  // query to canonical title candidates and a second TMDB round tries them.
+  // One confident candidate whose TMDB hit matches it back replaces the main
+  // AI round entirely (~2s instead of 6-16s); otherwise the candidates ride
+  // along in the AI prompt as intent hints. Rewrite-derived results always
+  // rank below original-query results — the term is a guess, the query is
+  // intent.
+  let rewriteTerms: string[] = [];
+  let rewriteValidated: string[] = [];
+  let rewriteItems: MediaItem[] = [];
+  if (aiNeeded && !baseScores.some(s => s > 0) && !!useAIStore.getState().getDecryptedApiKey()) {
+    const rewriteT0 = performance.now();
+    rewriteTerms = getCachedRewrite(q);
+    if (rewriteTerms.length === 0) {
+      const rewritePrompt = isChinese
+        ? `用户在媒体搜索中输入："${q}"。它可能不是作品的标准标题（可能是缩写、绰号、大致描述或演员/角色名）。推断用户最想找的作品，返回 1-3 个候选的标准名称（最广为人知的原名，中文作品用中文名），按可能性从高到低排列。今天是 ${todayAnchor}，"今年/去年/10年前"等相对时间以该日期为准。只返回 JSON 字符串数组，如 ["Agents of S.H.I.E.L.D."]；无法推断则返回 []。不要解释。`
+        : `The user searched for: "${q}" in a media tracker. It may not be a work's canonical title (an abbreviation, a nickname, a loose description, or an actor/character name). Infer the work the user most likely wants and return 1-3 canonical title candidates (best-known original titles), most likely first. Today is ${todayAnchor}; resolve relative time like "10 years ago" against this date. Return ONLY a JSON array of strings, e.g. ["Agents of S.H.I.E.L.D."]; return [] if you cannot infer. No explanations.`;
+      try {
+        const raw = await withTimeout(
+          callAI([
+            { role: "system", content: "You are a precise assistant. Respond ONLY with a JSON array of strings, no markdown." },
+            { role: "user", content: rewritePrompt }
+          ], 0, { disableSearch: true, maxTokens: 200 }),
+          REWRITE_TIMEOUT_MS,
+          ""
+        );
+        rewriteTerms = parseRewriteTerms(raw, q);
+      } catch {
+        rewriteTerms = [];
+      }
+      if (rewriteTerms.length > 0) cacheRewrite(q, rewriteTerms);
+    }
+    // Second TMDB round with the candidates — only when the type filter
+    // admits movies/TV at all.
+    if (rewriteTerms.length > 0 && (!type || type === 'All' || type === MediaType.MOVIE || type === MediaType.TV_SERIES)) {
+      const t = (type === MediaType.MOVIE) ? 'movie' : (type === MediaType.TV_SERIES) ? 'tv' : 'multi';
+      const flat = (await Promise.all(
+        rewriteTerms.map(term => searchTMDB(term, t as any, tmdbLanguageFromQuery(term)))
+      ))
+        .flat()
+        .filter((item: any) => item.media_type !== 'person');
+      rewriteItems = flat.map(toMediaItemFromTMDB);
+      // A term is "validated" when a returned title matches it back.
+      for (const term of rewriteTerms) {
+        const tn = normalizeKey(term);
+        if (!tn) continue;
+        const hit = flat.some((item: any) => {
+          const itn = normalizeKey(item.title || item.name || '');
+          return !!itn && (itn.includes(tn) || tn.includes(itn));
+        });
+        if (hit) rewriteValidated.push(term);
+      }
+    }
+    // Skip the main AI round only when the model was confident (a single
+    // candidate) AND TMDB confirmed it — trusting a multi-candidate guess
+    // would turn one wrong guess into the only answer. Series targets still
+    // consult the AI for the latest-season lookup.
+    if (rewriteTerms.length === 1 && rewriteValidated.length > 0 && !isSeriesTarget) {
+      aiNeeded = false;
+    }
+    if (diagEnabled) addStep('查询改写', rewriteT0, String(useAIStore.getState().provider || 'ai'), { terms: rewriteTerms, validated: rewriteValidated, aiNeeded });
+  }
+
+  // TMDB multi-search person entries (actors/directors) used to be dropped
+  // wholesale. A person result embeds `known_for` — the entry's most notable
+  // works — which is the only structured source that can answer an actor-name
+  // query ("emily dickinson" → the series Dickinson) without the AI round
+  // trip. Harvested only when nothing else answered (original-query hits, a
+  // learned-alias hit, or validated rewrite candidates), the query reads as
+  // a name (2+ tokens), and the credit's title overlaps the query — otherwise
+  // the person entry stays noise and an unconnected filmography would flood
+  // the results. Deliberately does not feed the AI-skip decision: the AI call
+  // behaves as before, this only enriches the candidate pool.
+  const personKnownForItems: MediaItem[] = (() => {
+    if (baseScores.some(s => s > 0) || aliasHit || rewriteValidated.length > 0) return [];
+    const qTokens = q.toLowerCase().split(/[\s,，.。·:：]+/).map(s => s.trim()).filter(Boolean);
+    if (qTokens.length < 2) return [];
+    if (type && type !== 'All' && type !== MediaType.MOVIE && type !== MediaType.TV_SERIES) return [];
+    const seenTitles = new Set<string>();
+    const items: MediaItem[] = [];
+    for (const person of tmdbRes) {
+      if (person.media_type !== 'person' || !Array.isArray(person.known_for)) continue;
+      for (const kf of person.known_for) {
+        if (!kf || kf.media_type === 'person') continue;
+        const title = String(kf.title || kf.name || '').trim();
+        if (!title || relevanceScore(title) <= 0) continue; // title-connected only
+        const releaseDate = String(kf.release_date || kf.first_air_date || '').trim();
+        const key = `${title.toLowerCase()}|${releaseDate.slice(0, 4)}`;
+        if (seenTitles.has(key)) continue;
+        seenTitles.add(key);
+        items.push({
+          id: uuidv4(),
+          title,
+          directorOrAuthor: '',
+          description: String(kf.overview || ''),
+          releaseDate,
+          type: kf.media_type === 'movie' ? MediaType.MOVIE : MediaType.TV_SERIES,
+          isOngoing: false,
+          posterUrl: getTMDBPosterUrl(kf.poster_path) || undefined,
+          tmdbId: typeof kf.id === 'number' ? kf.id : undefined,
+          tmdbMediaType: kf.media_type === 'movie' || kf.media_type === 'tv' ? kf.media_type : undefined,
+          rating: kf.vote_average ? `${kf.vote_average.toFixed(1)}/10` : undefined,
+          status: 'To Watch',
+          addedAt: new Date().toISOString()
+        } as MediaItem);
+        if (items.length >= 5) return items;
+      }
+    }
+    return items;
+  })();
 
   let searchContext = "";
   // Forced web grounding: unless the model can search natively (server-side),
   // always pre-fetch engine results — the user's configured engine first, with
   // the keyless built-in DuckDuckGo as fallback — so the prompt carries real
   // web data even when the model skips the web_search tool.
-  const useSearchContext = shouldUseAI && !canUseNativeSearch(true);
+  const useSearchContext = aiNeeded && !canUseNativeSearch(true);
   if (useSearchContext && isSeriesTarget) {
       // Seasonal work: also search for the latest episode/season and merge it in
       // — a plain title query usually surfaces only the show itself or older
@@ -2820,7 +2982,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   const { systemPrompt, provider } = useAIStore.getState();
   
   let aiItems: MediaItem[] = [];
-  if (shouldUseAI) {
+  if (aiNeeded) {
       let userPrompt = "";
 
       const toolCallingProviders: AIProvider[] = ['moonshot', 'deepseek', 'openai', 'qwen', 'google', 'mistral', 'mimo', 'zhipu'];
@@ -2890,6 +3052,14 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       userPrompt += isChinese
           ? `\n[语言] 所有字段（title、directorOrAuthor、cast、description、latestUpdateInfo）必须全部用简体中文填写，外国作品使用通用中文译名。`
           : `\n[LANGUAGE] Fill ALL fields (title, directorOrAuthor, cast, description, latestUpdateInfo) in English; use the common English title for foreign works.`;
+      if (rewriteTerms.length > 0) {
+          userPrompt += isChinese
+              ? `\n[候选] 查询"${query}"可能指代：${JSON.stringify(rewriteTerms)}${rewriteValidated.length > 0 ? `；其中已在 TMDB 确认存在：${JSON.stringify(rewriteValidated)}` : ''}。请结合这些候选判断用户意图。`
+              : `\n[CANDIDATES] The query "${query}" may refer to: ${JSON.stringify(rewriteTerms)}${rewriteValidated.length > 0 ? `; verified on TMDB: ${JSON.stringify(rewriteValidated)}` : ''}. Judge the user's intent against these candidates.`;
+      }
+      userPrompt += isChinese
+          ? `\n[时间] 今天是 ${todayAnchor}，"今年/去年/10年前"等相对时间以该日期为准。`
+          : `\n[TIME] Today is ${todayAnchor}; resolve relative time ("last year", "10 years ago") against this date.`;
 
       const messages = [
         { role: "system", content: systemPrompt + (isChinese ? " 请务必使用JSON格式返回。不要使用Markdown代码块。只返回JSON数组。" : " Please return strictly valid JSON. Do not use markdown code blocks. Return ONLY a JSON array.") },
@@ -3031,8 +3201,9 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       return merged;
   };
 
-  // Merge Priority: Plugins > TMDB > Bangumi > AI (but fill gaps from lower-priority sources)
-  const allItems = [...pluginItems, ...tmdbItems, ...bangumiItems, ...aiItems];
+  // Merge Priority: Plugins > TMDB > rewrite candidates > Bangumi > AI (but
+  // fill gaps from lower-priority sources)
+  const allItems = [...pluginItems, ...tmdbItems, ...rewriteItems, ...bangumiItems, ...aiItems, ...personKnownForItems];
   const uniqueItems = new Map<string, MediaItem>();
 
   for (const item of allItems) {
