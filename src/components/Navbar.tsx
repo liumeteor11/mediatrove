@@ -1,7 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Search, Library, User, Menu, X, LogIn, Palette, ChevronDown, Globe, Calendar, Drama } from 'lucide-react';
-import { useAuthStore } from '../store/useAuthStore';
+import { Search, Library, User, Menu, X, Palette, ChevronDown, Globe, Calendar, Drama } from 'lucide-react';
 import { useThemeStore, Theme } from '../store/useThemeStore';
 import { useTranslation } from 'react-i18next';
 import { getAIDate } from '../services/aiService';
@@ -15,7 +14,6 @@ export const Navbar: React.FC = () => {
   const [isLangOpen, setIsLangOpen] = React.useState(false);
   const themeDropdownRef = useRef<HTMLDivElement>(null);
   const langDropdownRef = useRef<HTMLDivElement>(null);
-  const { user } = useAuthStore();
   const { theme, setTheme } = useThemeStore();
   const [aiDate, setAiDate] = React.useState<string>('');
 
@@ -174,15 +172,6 @@ export const Navbar: React.FC = () => {
                 )}
               </div>
 
-              {!user && (
-                <Link
-                  to="/login"
-                  className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap flex-shrink-0 transition-all shadow-sm bg-theme-accent text-theme-bg hover:bg-theme-accent-hover border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent"
-                >
-                  <LogIn className="w-4 h-4 flex-shrink-0" />
-                  {t('nav.sign_in')}
-                </Link>
-              )}
             </div>
           </div>
 
@@ -240,16 +229,6 @@ export const Navbar: React.FC = () => {
                 </div>
               </div>
 
-              {!user && (
-                <Link
-                  to="/login"
-                  onClick={() => setIsOpen(false)}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-base font-medium bg-theme-accent text-theme-bg hover:bg-theme-accent-hover border-2 border-theme-accent focus:outline-none focus:ring-2 focus:ring-theme-accent"
-                >
-                  <LogIn className="w-4 h-4" />
-                  {t('nav.sign_in')}
-                </Link>
-              )}
           </div>
         </div>
       )}
