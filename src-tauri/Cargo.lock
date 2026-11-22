@@ -2542,6 +2542,7 @@ dependencies = [
  "quick-xml 0.31.0",
  "rand_core 0.6.4",
  "reqwest 0.12.24",
+ "rustls",
  "scraper",
  "serde",
  "serde_json",

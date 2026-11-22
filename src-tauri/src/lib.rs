@@ -1915,6 +1915,11 @@ fn login_user(username: String, password: String, db: State<Arc<Database>>) -> R
     }
 }
 
+/// One-time rescue for accounts upgrading from the pre-login era: fold the
+/// shared "guest" bucket into the freshly authenticated account. Best-effort
+/// from the frontend right after login/register succeeds.
+/// (command body temporarily staged out for commit splitting)
+
 /// Local forgot-password recovery. Accounts only exist on the device that
 /// created them (users live in the local collection.json next to the data),
 /// so there is no server to email a reset link — a reset simply re-hashes the
@@ -2221,6 +2226,12 @@ use rand_core::OsRng;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // rustls 0.23 panics if a client is built before a crypto provider is
+    // installed; tauri-plugin-updater's reqwest hits this on Android.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
