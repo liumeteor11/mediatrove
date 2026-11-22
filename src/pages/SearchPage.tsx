@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw, Info } from 'lucide-react';
 import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
 import { recordLearnedAlias } from '../services/learnedAlias';
-import { MediaItem, CollectionCategory, MediaType } from '../types/types';
+import { MediaItem, CollectionCategory, MediaType, SearchPhase } from '../types/types';
 import { MediaCard } from '../components/MediaCard';
 import { useCollectionStore } from '../store/useCollectionStore';
 import { useAIStore } from '../store/useAIStore';
@@ -37,8 +37,8 @@ export const SearchPage: React.FC = () => {
   
   // Use global search store
   const { 
-    query, results, searchLoading, trendingLoading, error, selectedType, isTrending, currentSearchId,
-    setQuery, setResults, setSearchLoading, setTrendingLoading, setError, setSelectedType, setIsTrending, setCurrentSearchId, resetSearch
+    query, results, searchLoading, trendingLoading, error, selectedType, isTrending, currentSearchId, searchPhase,
+    setQuery, setResults, setSearchLoading, setTrendingLoading, setError, setSelectedType, setIsTrending, setCurrentSearchId, setSearchPhase, resetSearch
   } = useSearchStore();
 
   const loading = searchLoading || trendingLoading;
@@ -58,56 +58,6 @@ export const SearchPage: React.FC = () => {
     const id = uuidv4();
     setCurrentSearchId(id);
     return id;
-  };
-
-  const getRelevanceScore = (item: MediaItem, q: string) => {
-    const qLower = q.trim().toLowerCase();
-    if (!qLower) return 0;
-    const title = (item.title || '').toLowerCase();
-    const desc = (item.description || '').toLowerCase();
-    const people = `${item.directorOrAuthor || ''} ${(item.cast || []).join(' ')}`.toLowerCase();
-    const tokens = qLower
-      .split(/[\s,，。.;:：/\\\-_|]+/)
-      .map(s => s.trim())
-      .filter(s => s && (s.length > 1 || /\d/.test(s)));
-    if (!tokens.includes(qLower)) tokens.unshift(qLower);
-    let score = 0;
-    if (title === qLower) score += 200;
-    if (title.includes(qLower)) score += 120;
-    tokens.forEach(tk => {
-      if (title.includes(tk)) score += 40;
-      if (desc.includes(tk)) score += 10;
-      if (people.includes(tk)) score += 8;
-    });
-    const year = (item.releaseDate || '').split('-')[0];
-    if (year && qLower.includes(year)) score += 20;
-    return score;
-  };
-
-  // Parses "YYYY", "YYYY-MM", "YYYY-MM-DD" (also 2026年7月15日 / 2026/7/5)
-  // into a comparable timestamp. Year-only counts as the end of that year;
-  // items without any usable date return 0 and sort last.
-  const getReleaseTimestamp = (item: MediaItem): number => {
-    const m = (item.releaseDate || '').trim().match(/(\d{4})(?:[-\/.年]\s*(\d{1,2}))?(?:[-\/.月]\s*(\d{1,2}))?/);
-    // Years below 1000 (e.g. Bangumi's "0000-00-00" for unaired seasons) are
-    // placeholder data, not real dates — treat them as missing.
-    if (!m || Number(m[1]) < 1000) return 0;
-    const y = Number(m[1]);
-    const mo = m[2] ? Number(m[2]) : 12;
-    const d = m[3] ? Number(m[3]) : new Date(y, mo, 0).getDate();
-    const ts = new Date(y, mo - 1, d).getTime();
-    return Number.isFinite(ts) ? ts : 0;
-  };
-
-  // Search results are ordered newest first; relevance only breaks ties among
-  // same-date items, and undated items go to the bottom (relevance-ordered).
-  const sortByNewestFirst = (items: MediaItem[], q: string) => {
-    return [...items].sort((a, b) => {
-      const ta = getReleaseTimestamp(a);
-      const tb = getReleaseTimestamp(b);
-      if (ta !== tb) return tb - ta;
-      return getRelevanceScore(b, q) - getRelevanceScore(a, q);
-    });
   };
 
   const cancelOps = () => {
@@ -145,6 +95,15 @@ export const SearchPage: React.FC = () => {
     { label: t('search_page.filter_music'), value: MediaType.MUSIC },
     { label: t('search_page.filter_other'), value: MediaType.OTHER },
   ], [t]);
+
+  // Live status line under the search box while a search runs; literal keys
+  // so the i18n audit can see them.
+  const phaseLabels: Record<SearchPhase, string> = {
+    sources: t('search_page.phase_sources'),
+    rewrite: t('search_page.phase_rewrite'),
+    websearch: t('search_page.phase_websearch'),
+    verify: t('search_page.phase_verify'),
+  };
 
   // Initial load of trending if no results
   useEffect(() => {
@@ -278,12 +237,18 @@ export const SearchPage: React.FC = () => {
     }, 10000); // 10 seconds
 
     try {
-      const data = await searchMedia(q, selectedType);
+      const data = await searchMedia(q, selectedType, (phase) => {
+        // Phase updates from a superseded search must not overwrite the UI.
+        if (isOpActive(opId)) useSearchStore.getState().setSearchPhase(phase);
+      });
       clearTimeout(timeoutId);
       
       if (!isOpActive(opId)) return;
       const duration = Math.round(performance.now() - startTs);
-      const sorted = sortByNewestFirst(data, q);
+      // searchMedia already ranks by relevance (confirmed associations →
+      // exact/containment title matches → AI suggestions → provider order);
+      // keep that order instead of re-sorting by release date.
+      const sorted = data;
       setResults(sorted);
       useAIStore.getState().setConfig({ lastSearchDurationMs: duration, lastSearchAt: new Date().toISOString(), lastSearchQuery: q });
       
@@ -310,7 +275,10 @@ export const SearchPage: React.FC = () => {
       if (isOpActive(opId)) setError(`${t('search_page.search_error')} ${errorMsg}`);
       toast.error(t('search_page.search_error'));
     } finally {
-      if (isOpActive(opId)) setSearchLoading(false);
+      if (isOpActive(opId)) {
+        setSearchLoading(false);
+        setSearchPhase(null);
+      }
     }
   };
 
@@ -390,7 +358,9 @@ export const SearchPage: React.FC = () => {
           return next;
       });
 
-      const sorted = sortByNewestFirst(mapped, q);
+      // Preserve the relevance ranking from searchMedia; mapping only patches
+      // metadata onto existing rows.
+      const sorted = mapped;
       setResults(prev => {
         if (!isOpActive(opId)) return prev;
         return sorted;
@@ -683,6 +653,13 @@ export const SearchPage: React.FC = () => {
                 <AlertCircle className="w-6 h-6 mr-2" />
                 {error}
             </div>
+        )}
+
+        {searchLoading && searchPhase && (
+          <div className="flex items-center justify-center gap-2 pb-2 text-sm text-theme-subtext">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span>{phaseLabels[searchPhase]}</span>
+          </div>
         )}
 
         {(searchLoading || (trendingLoading && results.length === 0)) ? (

@@ -139,7 +139,11 @@ export const searchTMDB = async (query: string, type: 'movie' | 'tv' | 'multi' =
   try {
     const url = `${TMDB_BASE_URL}/search/${type}?api_key=${key}&query=${encodeURIComponent(query)}&language=${encodeURIComponent(language)}&include_adult=false`;
     const t0 = performance.now();
-    const res = await fetch(url);
+    // A polluted/hung DNS path must not stall the whole search: TMDB is one
+    // of several parallel sources and the AI path can still answer.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
     if (!res.ok) throw new Error(`TMDB Error: ${res.statusText}`);
     const data = await res.json();
     const results = data.results || [];

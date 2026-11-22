@@ -3,7 +3,7 @@ import { searchBangumi } from './bangumiService';
 import { usePluginStore } from '../store/usePluginStore';
 import { PluginExecutor } from './pluginService';
 import OpenAI from "openai";
-import { MediaType, MediaItem, SeasonInfo, SearchDiagnostics } from "../types/types";
+import { MediaType, MediaItem, SeasonInfo, SearchDiagnostics, SearchPhase } from "../types/types";
 import { v4 as uuidv4 } from 'uuid';
 import { useAIStore } from "../store/useAIStore";
 import { useCollectionStore } from "../store/useCollectionStore";
@@ -505,10 +505,11 @@ export const sanitizeSearchQuery = (raw: string): string => {
     return q;
 };
 
-export const performClientSideSearch = async (
+const performClientSideSearchInner = async (
     query: string,
     force: boolean = false,
-    preferredType?: MediaType | 'All'
+    preferredType?: MediaType | 'All',
+    fastMode: boolean = false
 ): Promise<string> => {
     const {
         enableSearch,
@@ -618,8 +619,11 @@ export const performClientSideSearch = async (
         };
 
         const qList = [base]; 
-        // Add type-specific query to improve results (especially for DuckDuckGo fallback)
-        if (effType !== 'All') {
+        // Add type-specific query to improve results (especially for DuckDuckGo fallback).
+        // fastMode (AI tool calls) skips the expansion: the model's query is
+        // already intent-rich, and every extra variant is another network
+        // round-trip (real-world case: 16 engine requests / 40s+ per search).
+        if (effType !== 'All' && !fastMode) {
             const typeHint = englishTypeTerm(effType);
             if (typeHint) qList.push(`${base} ${typeHint}`);
         }
@@ -634,7 +638,7 @@ export const performClientSideSearch = async (
         };
         const maxDomainQueries = (effType === MediaType.MOVIE || effType === MediaType.TV_SERIES) ? 2 : 1;
         const selectedDomains = domsForSearch.slice(0, maxDomainQueries);
-        for (const dRaw of selectedDomains) {
+        for (const dRaw of (fastMode ? [] : selectedDomains)) {
             const d = String(dRaw || '').trim().replace(/^site:/i,'').replace(/^www\./i,'').split('/')[0];
             if (!d) continue;
             const englishDomain = d.includes('imdb.com') || d.includes('themoviedb.org') || d.includes('tvmaze.com') || (d.includes('wikipedia.org') && !d.includes('zh.wikipedia.org')) || d.includes('goodreads.com') || d.includes('discogs.com') || d.includes('musicbrainz.org');
@@ -1292,11 +1296,59 @@ export const performClientSideSearch = async (
     return "";
 };
 
+// Engine health circuit: consecutive unusable engine lookups (empty result or
+// transport failure) open a short circuit, so the AI tool loop stops hammering
+// a dead or rate-limited engine. Measured on the real app: a single search ran
+// 16 engine requests and burned 40s+ retrying one unreachable endpoint.
+let engineFailureStreak = 0;
+let engineCircuitUntil = 0;
+const ENGINE_CIRCUIT_FAILURES = 2;
+const ENGINE_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
+
+export const resetEngineCircuit = (): void => {
+    engineFailureStreak = 0;
+    engineCircuitUntil = 0;
+};
+
+export const performClientSideSearch = async (
+    query: string,
+    force: boolean = false,
+    preferredType?: MediaType | 'All',
+    fastMode: boolean = false
+): Promise<string> => {
+    if (Date.now() < engineCircuitUntil) return "";
+    let res = "";
+    try {
+        res = await performClientSideSearchInner(query, force, preferredType, fastMode);
+    } catch {
+        res = "";
+    }
+    const usable = (() => {
+        try {
+            const arr = JSON.parse(res);
+            return Array.isArray(arr) && arr.length > 0;
+        } catch {
+            return false;
+        }
+    })();
+    if (usable) {
+        engineFailureStreak = 0;
+    } else {
+        engineFailureStreak += 1;
+        if (engineFailureStreak >= ENGINE_CIRCUIT_FAILURES) {
+            engineCircuitUntil = Date.now() + ENGINE_CIRCUIT_COOLDOWN_MS;
+            engineFailureStreak = 0;
+        }
+    }
+    return res;
+};
+
 export const clearSearchCache = async (): Promise<boolean> => {
     try {
         searchCache.clear();
         prefetchedImages.clear();
         testConnectionCache.clear();
+        resetEngineCircuit();
 
         // Clear localStorage search cache
         try {
@@ -2053,7 +2105,7 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                                     if (q) {
                                         // Execute search (forced when the caller asked for it
                                         // even though the global search toggle is off).
-                                        const results = await performClientSideSearch(q, !!options.forceSearch);
+                                        const results = await performClientSideSearch(q, !!options.forceSearch, undefined, true);
                                         currentMessages.push({
                                             role: "tool",
                                             tool_call_id: toolCall.id,
@@ -2106,7 +2158,7 @@ export const callAI = async (messages: any[], temperature: number = 0.7, options
                                 if (seenQueries.has(c.query)) continue;
                                 seenQueries.add(c.query);
                                 let r = "";
-                                try { r = await performClientSideSearch(c.query, !!options.forceSearch); } catch {}
+                                try { r = await performClientSideSearch(c.query, !!options.forceSearch, undefined, true); } catch {}
                                 parts.push(`[web_search "${c.query}"]\n${r || "No relevant search results found."}`);
                             }
                             currentMessages.push({
@@ -2448,7 +2500,11 @@ export const callAIStream = async (
     throw lastError || new Error('AI streaming failed');
 };
 
-export const searchMedia = async (query: string, type?: MediaType | 'All'): Promise<MediaItem[]> => {
+export const searchMedia = async (
+  query: string,
+  type?: MediaType | 'All',
+  onPhase?: (phase: SearchPhase) => void
+): Promise<MediaItem[]> => {
   const q = query.trim();
   if (!q) return [];
 
@@ -2537,8 +2593,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   // The cache is keyed by query language for the same reason.
   const queryLang = detectQueryLang(q);
   const langKey = queryLang;
-  // v2: relevance gating changed result quality — don't serve pre-v2 cached garbage.
-  const cacheKey = `media_tracker_search_v2_${langKey}_${type || 'All'}_${q.toLowerCase()}`;
+  // v4: AI suggestions survive the relevance gate and engine expansion is trimmed (short-fragment containment demoted,
+  // confirmed rewrite/alias matches boosted) — pre-v3 entries can pin the old
+  // junk ("AOS" → 12 Portuguese films) for the full TTL.
+  const cacheKey = `media_tracker_search_v4_${langKey}_${type || 'All'}_${q.toLowerCase()}`;
   const cacheTsKey = `${cacheKey}_ts`;
   const cacheStepT0 = performance.now();
   try {
@@ -2561,6 +2619,11 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
     }
   } catch {}
   if (diagEnabled) addStep('缓存检查', cacheStepT0, 'cache');
+
+  // Live phase reporting: the search page shows which stage is running
+  // (sources → rewrite → websearch → verify) so a 2s hit and a 20s AI round
+  // both feel deliberate instead of hung.
+  onPhase?.('sources');
 
   // Every language decision below (AI prompt, output-language clause, season
   // search terms) follows the query language — the UI language only matters
@@ -2753,6 +2816,17 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   }
   const normalizeKey = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '').trim();
   const qKey = normalizeKey(q);
+  // Containment only counts as a strong (90) match when the shared fragment is
+  // substantial: a short Latin query behaves like an acronym and its substring
+  // hits are noise ("aos" ⊂ "aviso aos navegantes" matched 12 Portuguese films
+  // and — via the four-strong-hits rule — suppressed the AI association for
+  // "AOS" entirely). CJK fragments carry more information per character, so
+  // two Han characters already qualify.
+  const isSubstantialFragment = (a: string, b: string): boolean => {
+    const short = a.length <= b.length ? a : b;
+    const hasCjk = /[\u4e00-\u9fff]/.test(short);
+    return hasCjk ? short.length >= 2 : short.length >= 4;
+  };
   // Title relevance vs the query. Providers like Bangumi return loosely-related
   // entries (shared genre/keywords) that would otherwise bury the real match.
   // 100 = exact title, 90 = containment, 70/30 = token overlap, 0 = unrelated.
@@ -2760,7 +2834,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
     const t = normalizeKey(title);
     if (!t || !qKey) return 0;
     if (t === qKey) return 100;
-    if (t.includes(qKey) || qKey.includes(t)) return 90;
+    if ((t.includes(qKey) || qKey.includes(t)) && isSubstantialFragment(t, qKey)) return 90;
     const qTokens = q.toLowerCase().split(/[\s,，.。·:：]+/).map(normalizeKey).filter(w => w.length >= 2);
     if (qTokens.length >= 2) {
       const hits = qTokens.filter(w => t.includes(w)).length;
@@ -2805,7 +2879,24 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   let rewriteTerms: string[] = [];
   let rewriteValidated: string[] = [];
   let rewriteItems: MediaItem[] = [];
-  if (aiNeeded && !baseScores.some(s => s > 0) && !!useAIStore.getState().getDecryptedApiKey()) {
+  // When to consult the rewrite (issues found by real-key testing):
+  //  - hard queries: the AI is running anyway and nothing title-relevant matched;
+  //  - many literal containment hits but no exact title: the query may be a
+  //    character/actor name whose work isn't titled like it ("emily dickinson"
+  //    surfaced only poet documentaries; the series "Dickinson" never appeared);
+  //  - a very short Latin query that equals a literal title is usually an
+  //    acronym colliding with an obscure film ("AOS" == the 1964 short "Aos"),
+  //    so the exact-match shortcut must not suppress the association.
+  const acronymLike = qKey.length >= 2 && qKey.length <= 4
+      && /^[a-z0-9]+$/.test(qKey) && /[a-z]/.test(qKey);
+  const strongContainmentCount = baseScores.filter(s => s === 90).length;
+  const rewriteWanted = !!useAIStore.getState().getDecryptedApiKey() && !isSeriesTarget && (
+      (aiNeeded && !baseScores.some(s => s >= 90)) ||
+      (strongContainmentCount >= 2 && !hasExactBaseMatch && !aliasHit) ||
+      (acronymLike && baseScores.some(s => s === 100))
+  );
+  if (rewriteWanted) {
+    onPhase?.('rewrite');
     const rewriteT0 = performance.now();
     rewriteTerms = getCachedRewrite(q);
     if (rewriteTerms.length === 0) {
@@ -2828,9 +2919,10 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       if (rewriteTerms.length > 0) cacheRewrite(q, rewriteTerms);
     }
     // Second TMDB round with the candidates — only when the type filter
-    // admits movies/TV at all.
-    if (rewriteTerms.length > 0 && (!type || type === 'All' || type === MediaType.MOVIE || type === MediaType.TV_SERIES)) {
-      const t = (type === MediaType.MOVIE) ? 'movie' : (type === MediaType.TV_SERIES) ? 'tv' : 'multi';
+    // admits movies/TV at all (TV_SERIES never reaches this block: it forces
+    // isSeriesTarget, which disables the rewrite).
+    if (rewriteTerms.length > 0 && (!type || type === 'All' || type === MediaType.MOVIE)) {
+      const t = (type === MediaType.MOVIE) ? 'movie' : 'multi';
       const flat = (await Promise.all(
         rewriteTerms.map(term => searchTMDB(term, t as any, tmdbLanguageFromQuery(term)))
       ))
@@ -2911,6 +3003,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   // always pre-fetch engine results — the user's configured engine first, with
   // the keyless built-in DuckDuckGo as fallback — so the prompt carries real
   // web data even when the model skips the web_search tool.
+  if (aiNeeded) onPhase?.('websearch');
   const useSearchContext = aiNeeded && !canUseNativeSearch(true);
   if (useSearchContext && isSeriesTarget) {
       // Seasonal work: also search for the latest episode/season and merge it in
@@ -3060,6 +3153,9 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       userPrompt += isChinese
           ? `\n[时间] 今天是 ${todayAnchor}，"今年/去年/10年前"等相对时间以该日期为准。`
           : `\n[TIME] Today is ${todayAnchor}; resolve relative time ("last year", "10 years ago") against this date.`;
+      userPrompt += isChinese
+          ? `\n[广度] 若查询是描述、题材或模糊记忆而非具体作品名（例如"一只猫的故事"），请返回 5-8 部相关或相似的作品（如《穿靴子的猫》《一只猫的奇幻漂流》），并保证每部都有准确的片名与年份；不要只返回一部。`
+          : `\n[BREADTH] If the query is a description, a theme, or a half-remembered plot rather than a specific title, return 5-8 related or similar works with accurate titles and years — not just one.`;
 
       const messages = [
         { role: "system", content: systemPrompt + (isChinese ? " 请务必使用JSON格式返回。不要使用Markdown代码块。只返回JSON数组。" : " Please return strictly valid JSON. Do not use markdown code blocks. Return ONLY a JSON array.") },
@@ -3231,12 +3327,51 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
   // Relevance gate & ranking: when at least one result is title-relevant to the
   // query, drop the zero-relevance noise and put the best matches first. For
   // queries that match no title at all (director/genre searches) keep everything.
-  const bestScore = filtered.reduce((m, it) => Math.max(m, relevanceScore(it.title)), 0);
-  if (bestScore > 0) {
-      filtered = filtered.filter(it => relevanceScore(it.title) > 0);
-  }
+  // Items matched by a validated rewrite candidate or by a learned alias carry
+  // a confirmed association even when their title shares no characters with the
+  // query ("AOS" → "Marvel's Agents of S.H.I.E.L.D."): without the top-rank
+  // treatment they would score 0 and be filtered out in favour of substring
+  // noise like the Portuguese "aos" films.
+  // Order matters: the learned alias is human-confirmed, the rewrite terms
+  // carry the model's own confidence ranking (most likely first).
+  const confirmedTitles = [...(learnedAliasTitle ? [learnedAliasTitle] : []), ...rewriteValidated];
+  // Equality, or the confirmed title makes up at least half of the result
+  // title ("Marvel's Agents of S.H.I.E.L.D." for the term "Agents of
+  // S.H.I.E.L.D."). Plain containment is not enough: the validated series
+  // "Dickinson" would boost every documentary whose long title merely
+  // contains the word ("Voices & Visions: Emily Dickinson"), and same-score
+  // insertion order then put the documentaries first.
+  const confirmedRank = (title: string): number => {
+      const t = normalizeKey(title);
+      if (!t) return -1;
+      for (let i = 0; i < confirmedTitles.length; i++) {
+          const cn = normalizeKey(confirmedTitles[i]);
+          if (!cn) continue;
+          if (t === cn) return i;
+          if (!isSubstantialFragment(t, cn)) continue;
+          const shorter = t.length <= cn.length ? t : cn;
+          const longer = t.length <= cn.length ? cn : t;
+          if (longer.includes(shorter) && shorter.length / longer.length >= 0.5) return i;
+      }
+      return -1;
+  };
+  // Ranking only — nothing is discarded here any more (the 12-row cap below
+  // bounds the list). The old "drop every zero-score item once any positive
+  // match exists" rule cut legitimate suggestions: one coincidental title
+  // overlap ("猫的故事" inside "一只猫的故事") discarded every other AI work.
+  // Ordering already keeps irrelevant rows at the bottom, and providers only
+  // return query-related candidates in the first place.
+  const aiItemIds = new Set(aiItems.map(i => i.id));
+  const ranking = (it: MediaItem): number => {
+      const rank = confirmedRank(it.title);
+      if (rank >= 0) return 1000 - rank;
+      const rel = relevanceScore(it.title);
+      // AI works are semantic suggestions: above unverified provider noise,
+      // below any literal title match.
+      return aiItemIds.has(it.id) ? Math.max(rel, 50) : rel;
+  };
   filtered = filtered
-      .map((it, i) => ({ it, i, score: relevanceScore(it.title) }))
+      .map((it, i) => ({ it, i, score: ranking(it) }))
       .sort((a, b) => (b.score - a.score) || (a.i - b.i))
       .map(x => x.it);
 
@@ -3333,6 +3468,7 @@ export const searchMedia = async (query: string, type?: MediaType | 'All'): Prom
       filtered = filtered.filter(it => it.type === type);
   }
 
+  onPhase?.('verify');
   filtered = await enrichWithTMDB(filtered);
   if (diagEnabled) finalizeDiagnostics();
 

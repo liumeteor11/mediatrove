@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MediaItem, MediaType } from '../types/types';
+import { MediaItem, MediaType, SearchPhase } from '../types/types';
 
 interface SearchState {
   query: string;
@@ -11,7 +11,8 @@ interface SearchState {
   selectedType: MediaType | 'All';
   isTrending: boolean;
   currentSearchId: string | null;
-  
+  searchPhase: SearchPhase | null;
+
   setQuery: (query: string) => void;
   setResults: (results: MediaItem[] | ((prev: MediaItem[]) => MediaItem[])) => void;
   setSearchLoading: (loading: boolean) => void;
@@ -20,6 +21,7 @@ interface SearchState {
   setSelectedType: (type: MediaType | 'All') => void;
   setIsTrending: (isTrending: boolean) => void;
   setCurrentSearchId: (id: string | null) => void;
+  setSearchPhase: (phase: SearchPhase | null) => void;
   resetSearch: () => void;
 }
 
@@ -33,6 +35,7 @@ export const useSearchStore = create<SearchState>((set) => ({
   selectedType: 'All',
   isTrending: true,
   currentSearchId: null,
+  searchPhase: null,
 
   setQuery: (query) => set({ query }),
   setResults: (results) => set((state) => ({
@@ -44,6 +47,7 @@ export const useSearchStore = create<SearchState>((set) => ({
   setSelectedType: (selectedType) => set({ selectedType }),
   setIsTrending: (isTrending) => set({ isTrending }),
   setCurrentSearchId: (currentSearchId) => set({ currentSearchId }),
+  setSearchPhase: (searchPhase) => set({ searchPhase }),
   resetSearch: () => set({
     query: '',
     results: [],
@@ -51,6 +55,7 @@ export const useSearchStore = create<SearchState>((set) => ({
     trendingLoading: false,
     error: null,
     isTrending: true,
-    currentSearchId: null
+    currentSearchId: null,
+    searchPhase: null
   }),
 }));

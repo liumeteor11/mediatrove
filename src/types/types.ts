@@ -109,3 +109,8 @@ export interface SearchDiagnostics {
   steps: SearchDiagnosticsStep[];
   quota: SearchDiagnosticsQuota[];
 }
+
+// Progress phases of searchMedia, surfaced as live status text on the search
+// page while a search runs (sources → rewrite → websearch → verify).
+export type SearchPhase = 'sources' | 'rewrite' | 'websearch' | 'verify';
+
