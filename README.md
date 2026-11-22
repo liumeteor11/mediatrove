@@ -34,6 +34,10 @@ Describe what you feel like — *"90s cyberpunk novels"* or *"movies like Inters
   <img src="docs/screenshots/search-trending.png" width="820" alt="AI search and trending recommendations" />
 </p>
 
+### 🔎 Fuzzy search that reads between the lines
+
+Type an abbreviation, an actor's name, or a half-remembered plot — *"AOS"*, *"emily dickinson"*, *"10 years ago, about aliens, had a director and a Chinese actress named Daisy"* — and MediaTrove still finds the work. When plain title lookups come up empty, an AI first-pass rewrites your query into real title candidates that are verified against TMDB, and TMDB person results are mined for their notable works. Once you collect the right work, the app remembers what your shorthand meant and resolves the same query instantly next time — no re-deriving, no waiting. Inside your collection, search matches cast and director too, not just titles.
+
 ### 📚 One collection for six kinds of media
 
 Movies, TV series, books, comics, short dramas and music albums live side by side, organized into **To Watch**, **Watched** and **Favorites** — with pinning, drag-and-drop ordering, custom collection folders, and one-click metadata refresh. Ongoing series track themselves: new episodes and chapters are checked automatically (TV series use authoritative TMDB episode data), and the update lands at the top of your grid with a badge.
