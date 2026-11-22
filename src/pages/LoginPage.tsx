@@ -94,9 +94,12 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-[80vh] flex items-center justify-center px-4 py-8 relative overflow-x-clip">
-       {/* Background Glow */}
-       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full blur-[100px] opacity-20 pointer-events-none bg-theme-accent" />
+    <div className="min-h-[80vh] flex items-center justify-center px-4 py-8 relative">
+       {/* Background Glow — same full-bleed treatment as the search page:
+           wrapper-level overflow-x-clip cut it at the content-box edge and
+           left hard background strips on narrow screens; html { overflow-x:
+           clip } handles the horizontal overflow instead. */}
+       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[max(600px,110vw)] lg:w-[600px] h-[600px] rounded-full blur-[100px] opacity-20 pointer-events-none bg-theme-accent" />
 
       <div className="max-w-md w-full rounded-2xl shadow-xl border p-8 relative z-10 transition-colors duration-300 bg-theme-surface border-theme-border">
         <div className="text-center mb-8">

@@ -529,9 +529,14 @@ export const SearchPage: React.FC = () => {
 
   return (
     <>
-    <div className="space-y-8 relative overflow-x-clip">
-       {/* Spotlight Effect */}
-       <div className="absolute top-[-100px] left-1/2 transform -translate-x-1/2 w-[600px] h-[600px] rounded-full blur-[100px] opacity-30 pointer-events-none bg-theme-accent" />
+    <div className="space-y-8 relative">
+       {/* Spotlight Effect — wider than the viewport on mobile/tablet so the
+           blurred wash reaches the screen edges. The wrapper-level
+           overflow-x-clip used to cut it at the content-box edge, leaving two
+           hard strips of raw page background on either side. Horizontal
+           overflow is still clipped at the viewport by html { overflow-x: clip }
+           (index.css), so wide glows cannot reintroduce sideways dragging. */}
+       <div className="absolute top-[-100px] left-1/2 transform -translate-x-1/2 w-[max(600px,110vw)] lg:w-[600px] h-[600px] rounded-full blur-[100px] opacity-30 pointer-events-none bg-theme-accent" />
 
       {/* Search Header */}
       <div className="text-center mb-6 md:mb-12 space-y-4 md:space-y-6 relative z-10">
