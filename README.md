@@ -34,6 +34,10 @@ Describe what you feel like — *"90s cyberpunk novels"* or *"movies like Inters
   <img src="docs/screenshots/search-trending.png" width="820" alt="AI search and trending recommendations" />
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/search-results.png" width="820" alt="Search results with posters and metadata" />
+</p>
+
 ### 🔎 Fuzzy search that reads between the lines
 
 Type an abbreviation, an actor's name, or a half-remembered plot — *"AOS"*, *"emily dickinson"*, *"10 years ago, about aliens, had a director and a Chinese actress named Daisy"* — and MediaTrove still finds the work. When plain title lookups come up empty, an AI first-pass rewrites your query into real title candidates that are verified against TMDB, and TMDB person results are mined for their notable works. Once you collect the right work, the app remembers what your shorthand meant and resolves the same query instantly next time — no re-deriving, no waiting. Inside your collection, search matches cast and director too, not just titles.
