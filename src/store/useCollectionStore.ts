@@ -43,7 +43,11 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
         items.map((it) => (it.posterUrl && it.posterUrl.includes('mediatrove-placeholder')) ? { ...it, posterUrl: undefined } : it);
     try {
         if (isTauri) {
-            const username = useAuthStore.getState().user?.username || 'guest';
+            const username = useAuthStore.getState().user?.username;
+            if (!username) {
+                set({ collection: [], initialized: true, isLoading: false });
+                return;
+            }
             const items = await invoke<MediaItem[]>('get_collection', { username });
             set({ collection: stripLegacyPlaceholders(items), initialized: true, isLoading: false });
         } else {
@@ -93,7 +97,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
         
         // Persist
         if (isTauri) {
-            const username = useAuthStore.getState().user?.username || 'guest';
+            const username = useAuthStore.getState().user?.username;
+            if (!username) return;
             invoke('import_collection', { username, items: newItems }).catch(console.error);
         } else {
             localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
@@ -107,7 +112,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
       set({ collection: newOrder });
 
       if (isTauri) {
-          const username = useAuthStore.getState().user?.username || 'guest';
+          const username = useAuthStore.getState().user?.username;
+            if (!username) return;
           const ids = newOrder.map(i => i.id);
           invoke('reorder_collection', { username, ids }).catch(console.error);
       } else {
@@ -135,7 +141,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
       ];
 
       if (isTauri) {
-          const username = useAuthStore.getState().user?.username || 'guest';
+          const username = useAuthStore.getState().user?.username;
+            if (!username) return;
           const ids = updatedCollection.map(i => i.id);
           invoke('reorder_collection', { username, ids }).catch(console.error);
       } else {
@@ -151,7 +158,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
         console.warn('Export not available in web preview');
         return null;
       }
-      const username = useAuthStore.getState().user?.username || 'guest';
+      const username = useAuthStore.getState().user?.username;
+            if (!username) return;
       const path = await invoke<string>('export_collection', { username, targetPath, redactSensitive });
       return path;
     } catch (e) {
@@ -265,7 +273,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
 
         // Persist
         if (isTauri) {
-            const username = useAuthStore.getState().user?.username || 'guest';
+            const username = useAuthStore.getState().user?.username;
+            if (!username) return;
             // save_item only upserts data; send the full order afterwards so the
             // bumped item (or its parent folder) is stored at the front as well.
             invoke('save_item', { username, item: newItem })
@@ -309,7 +318,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
       });
 
     if (isTauri) {
-        const username = useAuthStore.getState().user?.username || 'guest';
+        const username = useAuthStore.getState().user?.username;
+            if (!username) return;
         invoke('remove_item', { username, id }).catch(console.error);
         releasedMembers.forEach(item => {
             invoke('save_item', { username, item }).catch(console.error);
@@ -332,7 +342,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
     });
 
     if (isTauri && updatedItem) {
-        const username = useAuthStore.getState().user?.username || 'guest';
+        const username = useAuthStore.getState().user?.username;
+            if (!username) return;
         invoke('save_item', { username, item: updatedItem }).catch(console.error);
     } else {
         localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
@@ -352,7 +363,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
     });
 
     if (isTauri && updatedItem) {
-        const username = useAuthStore.getState().user?.username || 'guest';
+        const username = useAuthStore.getState().user?.username;
+            if (!username) return;
         invoke('save_item', { username, item: updatedItem }).catch(console.error);
     } else {
         localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
@@ -400,7 +412,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
 
       // Persist
       if (isTauri) {
-          const username = useAuthStore.getState().user?.username || 'guest';
+          const username = useAuthStore.getState().user?.username;
+            if (!username) return;
           // Save collection item
           invoke('save_item', { username, item: collectionItem }).catch(console.error);
           // Save updated children
@@ -439,7 +452,8 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
 
       if (updatedItems.length > 0) {
           if (isTauri) {
-              const username = useAuthStore.getState().user?.username || 'guest';
+              const username = useAuthStore.getState().user?.username;
+            if (!username) return;
               updatedItems.forEach(item => {
                   invoke('save_item', { username, item }).catch(console.error);
               });

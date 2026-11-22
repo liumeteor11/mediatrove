@@ -113,7 +113,14 @@ const App: React.FC = () => {
     <HashRouter>
       <Layout>
         <Routes>
-          <Route path="/" element={<SearchPage />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <SearchPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/login" element={<LoginPage />} />
           <Route 
             path="/collection" 

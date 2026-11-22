@@ -285,6 +285,57 @@ impl Database {
         self.save()
     }
 
+    /// Rescue pass for users upgrading from the pre-login era: everything
+    /// tracked without an account landed in the shared "guest" bucket. Merge
+    /// it into the freshly authenticated account (dedup by id, chat sessions
+    /// keep the newer copy) and drop the bucket so the shared data can never
+    /// leak into a different account created later on the same device.
+    pub fn migrate_guest_data(&self, username: &str) -> Result<usize, String> {
+        let mut data = self.cache.lock().map_err(|e| e.to_string())?;
+        let mut moved = 0usize;
+
+        if let Some(guest_items) = data.items_by_user.remove("guest") {
+            moved += guest_items.len();
+            let list = data.items_by_user.entry(username.to_string()).or_default();
+            for item in guest_items {
+                if !list.iter().any(|i| i.id == item.id) {
+                    list.push(item);
+                }
+            }
+        }
+
+        if let Some(guest_chars) = data.characters_by_user.remove("guest") {
+            moved += guest_chars.len();
+            let list = data.characters_by_user.entry(username.to_string()).or_default();
+            for c in guest_chars {
+                if !list.iter().any(|i| i.id == c.id) {
+                    list.push(c);
+                }
+            }
+        }
+
+        if let Some(guest_sessions) = data.chat_sessions_by_user.remove("guest") {
+            moved += guest_sessions.len();
+            let list = data.chat_sessions_by_user.entry(username.to_string()).or_default();
+            for session in guest_sessions {
+                match list.iter_mut().find(|s| s.id == session.id) {
+                    Some(existing) => {
+                        if session.updated_at > existing.updated_at {
+                            *existing = session;
+                        }
+                    }
+                    None => list.insert(0, session),
+                }
+            }
+        }
+
+        if moved > 0 {
+            drop(data);
+            self.save()?;
+        }
+        Ok(moved)
+    }
+
     // --- Character chat sessions ---
     pub fn get_chat_sessions_for_user(&self, username: &str) -> Result<Vec<ChatSession>, String> {
         let data = self.cache.lock().map_err(|e| e.to_string())?;

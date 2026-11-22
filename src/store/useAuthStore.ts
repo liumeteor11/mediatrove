@@ -38,6 +38,9 @@ export const useAuthStore = create<AuthState>()(
           return;
         }
         const result = await invoke<{ username: string }>('login_user', { username, password: password || '' });
+        // Rescue any pre-login-era "guest" data before the auth subscriptions
+        // reload the user-scoped stores.
+        await invoke('migrate_guest_data', { username: result.username }).catch(console.error);
         set({ user: { username: result.username, lastBackup: new Date().toISOString() } });
       },
       register: async (username, password) => {
@@ -46,6 +49,7 @@ export const useAuthStore = create<AuthState>()(
           return;
         }
         const result = await invoke<{ username: string }>('register_user', { username, password });
+        await invoke('migrate_guest_data', { username: result.username }).catch(console.error);
         set({ user: { username: result.username, lastBackup: new Date().toISOString() } });
       },
       adoptUser: (username) => {

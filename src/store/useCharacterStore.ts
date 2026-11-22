@@ -62,13 +62,15 @@ const persistLocalStorage = (characters: DistilledCharacter[], sessions: ChatSes
 
 const persistCharacter = (character: DistilledCharacter) => {
   if (!isTauri) return;
-  const username = useAuthStore.getState().user?.username || 'guest';
+  const username = useAuthStore.getState().user?.username;
+        if (!username) return;
   invoke('save_character', { username, character }).catch(e => console.error('save_character failed', e));
 };
 
 const persistSession = (session: ChatSession) => {
   if (!isTauri) return;
-  const username = useAuthStore.getState().user?.username || 'guest';
+  const username = useAuthStore.getState().user?.username;
+        if (!username) return;
   invoke('save_chat_session', { username, session }).catch(e => console.error('save_chat_session failed', e));
 };
 
@@ -87,7 +89,8 @@ export const useCharacterStore = create<CharacterState>((set, get) => ({
     set({ isLoading: true });
     try {
       if (isTauri) {
-        const username = useAuthStore.getState().user?.username || 'guest';
+        const username = useAuthStore.getState().user?.username;
+        if (!username) return;
         const [characters, sessions] = await Promise.all([
           invoke<DistilledCharacter[]>('get_characters', { username }),
           invoke<ChatSession[]>('get_chat_sessions', { username }),
@@ -177,7 +180,8 @@ export const useCharacterStore = create<CharacterState>((set, get) => ({
     const characters = state.characters.filter(c => c.id !== id);
     const sessions = state.sessions.filter(s => s.characterId !== id);
     if (isTauri) {
-      const username = useAuthStore.getState().user?.username || 'guest';
+      const username = useAuthStore.getState().user?.username;
+        if (!username) return;
       invoke('remove_character', { username, id }).catch(e => console.error('remove_character failed', e));
     } else {
       persistLocalStorage(characters, sessions);
@@ -229,7 +233,8 @@ export const useCharacterStore = create<CharacterState>((set, get) => ({
   removeSession: (id) => set((state) => {
     const sessions = state.sessions.filter(s => s.id !== id);
     if (isTauri) {
-      const username = useAuthStore.getState().user?.username || 'guest';
+      const username = useAuthStore.getState().user?.username;
+        if (!username) return;
       invoke('remove_chat_session', { username, id }).catch(e => console.error('remove_chat_session failed', e));
     } else {
       persistLocalStorage(state.characters, sessions);

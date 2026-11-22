@@ -1918,7 +1918,12 @@ fn login_user(username: String, password: String, db: State<Arc<Database>>) -> R
 /// One-time rescue for accounts upgrading from the pre-login era: fold the
 /// shared "guest" bucket into the freshly authenticated account. Best-effort
 /// from the frontend right after login/register succeeds.
-/// (command body temporarily staged out for commit splitting)
+#[tauri::command]
+fn migrate_guest_data(username: String, db: State<Arc<Database>>) -> Result<usize, String> {
+    let u = username.trim();
+    if u.is_empty() || u == "guest" { return Ok(0); }
+    db.migrate_guest_data(u)
+}
 
 /// Local forgot-password recovery. Accounts only exist on the device that
 /// created them (users live in the local collection.json next to the data),
@@ -2323,6 +2328,7 @@ pub fn run() {
             register_user,
             login_user,
             reset_user_password,
+            migrate_guest_data,
             get_sync_token,
             set_sync_token,
             start_sync_server,
