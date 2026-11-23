@@ -95,10 +95,6 @@ MediaTrove 把你的整个媒体旅程收进一个本地、私密的收藏库，
 
 前往 [**Releases**](https://github.com/liumeteor11/mediatrove/releases) 获取最新安装包：Windows（NSIS/MSI）、macOS、Linux（AppImage/deb）与 Android（APK）。每次推送 `v*` 标签都会自动构建发布。
 
-<p align="center">
-  <img src="docs/screenshots/mobile-collection.png" width="300" alt="手机尺寸屏幕上的 MediaTrove" />
-</p>
-
 ## 🚀 快速上手
 
 MediaTrove 是本地应用——无需注册、没有服务器。安装后打开**仪表盘 → AI 配置**，粘贴一个你常用 AI 服务商的 API Key（以 **AES 加密**存储在本机），即可开始搜索。其余一切——TMDB、Bangumi、DuckDuckGo——无需任何 Key。

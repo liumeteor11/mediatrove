@@ -95,10 +95,6 @@ English & 简体中文 with auto-detection · three themes · offline-friendly c
 
 Grab the latest installer for your platform from [**Releases**](https://github.com/liumeteor11/mediatrove/releases): Windows (NSIS/MSI), macOS, Linux (AppImage/deb), and Android (APK). Releases are built and published automatically for every `v*` tag.
 
-<p align="center">
-  <img src="docs/screenshots/mobile-collection.png" width="300" alt="MediaTrove on a phone-sized screen" />
-</p>
-
 ## 🚀 Quick start
 
 MediaTrove is a local app — no account, no server. Install it, open **Dashboard → AI Configuration**, paste an API key from your favorite AI provider (stored **AES-encrypted** on your device), and start searching. Everything else — TMDB, Bangumi, DuckDuckGo — works without any keys.
