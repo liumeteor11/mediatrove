@@ -6,7 +6,51 @@ on:
   workflow_dispatch:
 
 jobs:
+  # One draft per run, created up front. The parallel desktop matrix used to
+  # let each tauri-action invocation race its own find-or-create, splitting
+  # a tag into two draft releases; every job below now uploads into THIS
+  # release instead (tauri-action via releaseId, the Android upload by tag).
+  # Skipped on workflow_dispatch (no tag): jobs then fall back to the old
+  # find-or-create behavior.
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ fromJSON(steps.create.outputs.result).id }}
+    steps:
+      - name: Create draft release
+        id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Re-runs for an existing tag must reuse the draft, not stack a
+            // second one on it.
+            const existing = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: process.env.GITHUB_REF_NAME
+            }).catch(() => null);
+            if (existing?.data?.draft) {
+              return { id: existing.data.id };
+            }
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: process.env.GITHUB_REF_NAME,
+              name: 'MediaTrove ' + process.env.GITHUB_REF_NAME,
+              body: 'See the assets to download this version and install.',
+              draft: true,
+              prerelease: false
+            });
+            return { id: data.id };
+
   release-desktop:
+    needs: create-release
+    # Run when the draft exists (tag push) or was skipped (dispatch); do not
+    # run on a cancelled/failed create step.
+    if: ${{ !cancelled() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
     permissions:
       contents: write
     strategy:
@@ -54,11 +98,16 @@ jobs:
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false
+          # Upload into the pre-created draft (empty on workflow_dispatch →
+          # the action falls back to its own find-or-create).
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           # The updater installs the NSIS setup on Windows (MSI has no silent
           # webview bootstrapping); latest.json should point at that artifact.
           updaterJsonPreferNsis: true
 
   release-android:
+    needs: create-release
+    if: ${{ !cancelled() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
