@@ -25,26 +25,29 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Re-runs for an existing tag must reuse the draft, not stack a
-            // second one on it.
-            const existing = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag: process.env.GITHUB_REF_NAME
-            }).catch(() => null);
-            if (existing?.data?.draft) {
-              return { id: existing.data.id };
+            const common = { owner: context.repo.owner, repo: context.repo.repo };
+            // Rebuild self-service: drop stale drafts left behind by earlier
+            // racing runs for this tag — their assets are machine-generated
+            // and fully reproducible by this run. Published releases for the
+            // tag are left untouched.
+            const drafts = [];
+            for await (const page of github.paginate.iterator(github.rest.repos.listReleases, common)) {
+              for (const rel of page.data) {
+                if (rel.draft && rel.tag_name === process.env.GITHUB_REF_NAME) drafts.push(rel);
+              }
+            }
+            for (const d of drafts) {
+              await github.rest.repos.deleteRelease({ ...common, release_id: d.id });
             }
             const { data } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              ...common,
               tag_name: process.env.GITHUB_REF_NAME,
               name: 'MediaTrove ' + process.env.GITHUB_REF_NAME,
               body: 'See the assets to download this version and install.',
               draft: true,
               prerelease: false
             });
-            return { id: data.id };
+            return { id: data.id, removedStaleDrafts: drafts.length };
 
   release-desktop:
     needs: create-release
