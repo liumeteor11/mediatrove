@@ -123,12 +123,17 @@ const progressFloor = (item: MediaItem, next: UpdateProgress | null): number => 
 const decideTotal = (
     stored: number | undefined,
     incoming: number,
-    opts: { authoritative: boolean; partial?: boolean; tmdbIdChanged: boolean; verified: boolean; floor: number; storedTier?: number; incomingTier?: number }
+    opts: { authoritative: boolean; partial?: boolean; tmdbIdChanged: boolean; verified: boolean; floor: number; storedTier?: number; incomingTier?: number; storedManual?: boolean }
 ): number | undefined => {
     if (!plausibleCount(incoming)) return undefined;
     if (incoming < opts.floor) return undefined;
     if (stored == null) return incoming;               // fill gap
     if (isYearLike(stored)) return incoming;           // heal year-as-count garbage
+    // A hand-entered total (manual provenance) is the user's word: no
+    // automated source may move it — growth included — so a correction
+    // survives every refresh. Disagreements surface as updateConflict on
+    // the card; editing the card again re-pins the value.
+    if (opts.storedManual) return undefined;
     if (incoming >= stored) return incoming;           // growth is always safe
     // Provenance gate: a weaker source may not talk a stronger-stored value
     // down (real regression: AI "verified" counts overwriting authoritative
@@ -254,6 +259,7 @@ export const buildUpdatePatch = (
     // Provenance: what the stored value came from vs. what this check is.
     const storedTier = episodeSourceTier(item.episodeSource);
     const incomingTier = authoritative ? 1 : (update.verified === true && update.sourceUrl ? 4 : 5);
+    const storedManual = item.episodeSource?.kind === 'manual';
     if (plausibleCount(update.totalEpisodes)) {
         const total = decideTotal(item.totalEpisodes, update.totalEpisodes, {
             authoritative,
@@ -262,7 +268,8 @@ export const buildUpdatePatch = (
             verified: update.verified === true,
             floor,
             storedTier,
-            incomingTier
+            incomingTier,
+            storedManual
         });
         if (total != null) {
             patch.totalEpisodes = total;
@@ -272,15 +279,25 @@ export const buildUpdatePatch = (
             // the stored value and surface the disagreement to the user.
             const storedKind = item.episodeSource?.kind ?? 'legacy';
             patch.updateConflict = `已保留 ${item.totalEpisodes} 集（信源 ${storedKind}${item.episodeSource?.url ? '，' + item.episodeSource.url : ''}）；${authoritative ? 'TMDB' : 'AI'} 信源声称 ${update.totalEpisodes} 集`;
+        } else if (storedManual && item.totalEpisodes != null && update.totalEpisodes !== item.totalEpisodes) {
+            // Manual pin rejected the source: show what the source claims so
+            // a persistently wrong source never silently overwrites (and the
+            // user knows why the number refuses to change).
+            patch.updateConflict = `总集数已锁定为手动值 ${item.totalEpisodes}（再次编辑卡片可修改）；${authoritative ? 'TMDB' : 'AI'} 信源报告 ${update.totalEpisodes} 集`;
         }
     }
     if (patch.totalEpisodes != null || patch.seasons || patch.latestUpdateInfo !== item.latestUpdateInfo) {
-        patch.episodeSource = {
-            kind: authoritative ? 'tmdb' : (update.verified === true && update.sourceUrl ? 'aggregator' : 'ai'),
-            ...(update.sourceUrl ? { url: update.sourceUrl } : {}),
-            at: Date.now(),
-            ...(patch.totalEpisodes != null ? { total: patch.totalEpisodes } : {})
-        };
+        // A manual pin survives a rejected source: the check was not allowed
+        // to move the total, so it must not claim provenance over it either
+        // (otherwise the next check would see a weak source and trample).
+        if (!storedManual || patch.totalEpisodes != null) {
+            patch.episodeSource = {
+                kind: authoritative ? 'tmdb' : (update.verified === true && update.sourceUrl ? 'aggregator' : 'ai'),
+                ...(update.sourceUrl ? { url: update.sourceUrl } : {}),
+                at: Date.now(),
+                ...(patch.totalEpisodes != null ? { total: patch.totalEpisodes } : {})
+            };
+        }
     }
     if (update.seasons && update.seasons.length > 0) {
         const seasons = mergeSeasons(item.seasons, update.seasons, {

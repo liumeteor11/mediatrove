@@ -110,6 +110,9 @@ struct FetchPageConfig {
 /// used to be killed at 120 s on the desktop while the browser build (OpenAI
 /// SDK, 10 min default) succeeded — hence "获取回复失败" only in the app.
 /// Connect and per-read stalls still fail fast; the total cap matches the SDK.
+/// Interactive flows (media-card refresh, dashboard sweep) bound their WAIT on
+/// the frontend instead of shortening this: killing the request here would
+/// regress the very "获取回复失败" bug the large cap fixed.
 const AI_CONNECT_TIMEOUT_SECS: u64 = 20;
 const AI_READ_TIMEOUT_SECS: u64 = 120;
 const AI_TOTAL_TIMEOUT_SECS: u64 = 600;

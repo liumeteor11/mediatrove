@@ -9,7 +9,7 @@ import { EditMediaModal } from './EditMediaModal';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import { toast } from 'react-toastify';
-import { checkUpdates, repairMediaItem, FALLBACK_POSTER, isPlaceholderPosterUrl } from '../services/aiService';
+import { checkUpdates, repairMediaItem, FALLBACK_POSTER, isPlaceholderPosterUrl, isUpdateCheckBusy, withTimeout } from '../services/aiService';
 import { getLocalPoster, cachePoster, resolvePosterRetry } from '../services/posterService';
 
 // Episode-grid helpers. The app's progress convention is "the last number in
@@ -22,6 +22,12 @@ import { getLocalPoster, cachePoster, resolvePosterRetry } from '../services/pos
 // only counts as an episode when it is not date-shaped, and a bare 4-digit
 // 1900–2100 number is treated as a year unless an explicit episode marker
 // ("第N集" / "更新至N集") claims it.
+// Manual per-card refresh wait cap: repair + update check are search/AI
+// round-trips that normally finish within this window. Beyond it the button
+// releases with a timeout toast while the backend check continues under the
+// global singleton lock.
+const REFRESH_WAIT_MS = 45000;
+
 const isEpisodeCandidate = (n: number, before: string, after: string, hasUnit: boolean): boolean => {
     // Date separators ("-03", "10/03") glue digit-groups into dates just like
     // 年/月/日 do; a trailing 期/季 marks a cour or season, not an episode.
@@ -418,6 +424,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({
       e.preventDefault();
       e.stopPropagation();
       if (isBackRefreshing) return;
+      // The global singleton lock (aiService) means a check launched from the
+      // dashboard/app mount is already running: a manual check would be
+      // silently skipped and report "no changes" while nothing was checked.
+      if (isUpdateCheckBusy()) {
+          toast.info(t('media_card.check_busy'));
+          return;
+      }
 
       setIsBackRefreshing(true);
       try {
@@ -433,9 +446,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
           let repaired = false;
           let updated = false;
+          let timedOut = false;
 
           if (isInfoMissing) {
-              const patch = await repairMediaItem(item);
+              // Repair is search + AI and can stall; cap the wait so the
+              // button recovers instead of spinning for the backend's full
+              // timeout window. A capped-out repair is simply skipped.
+              const patch = await withTimeout(repairMediaItem(item), REFRESH_WAIT_MS, null);
               if (patch) {
                   updateItem(item.id, patch);
                   repaired = true;
@@ -452,32 +469,41 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           const shouldCheckUpdates = item.isOngoing || isEpisodic;
 
           if (shouldCheckUpdates) {
-              const updates = await checkUpdates([item]);
-              const update = updates.find(u => u.id === item.id);
-              if (update) {
-                  const changed = update.latestUpdateInfo !== item.latestUpdateInfo;
-                  updateItem(item.id, {
-                      latestUpdateInfo: update.latestUpdateInfo,
-                      ...(update.episodeSource ? { episodeSource: update.episodeSource } : {}),
-                      ...(update.updateConflict !== undefined ? { updateConflict: update.updateConflict } : {}),
-                      isOngoing: update.isOngoing,
-                      ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
-                      ...(update.seasons ? { seasons: update.seasons } : {}),
-                      ...(update.tmdbId ? { tmdbId: update.tmdbId, tmdbMediaType: update.tmdbMediaType } : {}),
-                      lastCheckedAt: now,
-                      hasNewUpdate: changed ? true : item.hasNewUpdate
-                  });
-                  // New content floats the work to the front (not a pin).
-                  if (changed && update.isOngoing) {
-                      bumpToFront(item.id);
-                  }
-                  updated = true;
+              const updates = await withTimeout(checkUpdates([item]), REFRESH_WAIT_MS, null);
+              if (updates === null) {
+                  // The check itself keeps running in the background (the
+                  // singleton lock releases when it finishes); the button just
+                  // stops pretending the wait is bounded.
+                  timedOut = true;
               } else {
-                  updateItem(item.id, { lastCheckedAt: now });
+                  const update = updates.find(u => u.id === item.id);
+                  if (update) {
+                      const changed = update.latestUpdateInfo !== item.latestUpdateInfo;
+                      updateItem(item.id, {
+                          latestUpdateInfo: update.latestUpdateInfo,
+                          ...(update.episodeSource ? { episodeSource: update.episodeSource } : {}),
+                          ...(update.updateConflict !== undefined ? { updateConflict: update.updateConflict } : {}),
+                          isOngoing: update.isOngoing,
+                          ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
+                          ...(update.seasons ? { seasons: update.seasons } : {}),
+                          ...(update.tmdbId ? { tmdbId: update.tmdbId, tmdbMediaType: update.tmdbMediaType } : {}),
+                          lastCheckedAt: now,
+                          hasNewUpdate: changed ? true : item.hasNewUpdate
+                      });
+                      // New content floats the work to the front (not a pin).
+                      if (changed && update.isOngoing) {
+                          bumpToFront(item.id);
+                      }
+                      updated = true;
+                  } else {
+                      updateItem(item.id, { lastCheckedAt: now });
+                  }
               }
           }
 
-          if (repaired || updated) {
+          if (timedOut) {
+              toast.info(t('media_card.refresh_timeout'));
+          } else if (repaired || updated) {
               toast.success(t('media_card.refresh_success'));
           } else {
               toast.info(t('media_card.refresh_no_changes'));
@@ -528,7 +554,16 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           )}
         >
           {/* Front Side */}
-          <div className="absolute inset-0 backface-hidden rounded-theme overflow-hidden border-2 border-theme-border bg-theme-surface">
+          <div className={clsx(
+            "absolute inset-0 backface-hidden rounded-theme overflow-hidden border-2 border-theme-border bg-theme-surface",
+            // In the preserve-3d flip context, front-face children that create
+            // their own compositing layers (backdrop-blur badges) escape the
+            // parent's backface culling: when flipped they stay hit-testable
+            // and — mirrored to the top-right — intercept clicks meant for the
+            // back face's refresh button (the pinned-card bug). Silence the
+            // hidden face entirely instead of relying on culling.
+            isFlipped && "pointer-events-none"
+          )}>
             <div className="relative h-full w-full">
               {item.isCollection && (
                   <div className="absolute top-2 left-2 z-20 bg-black/60 backdrop-blur-md p-1.5 rounded-md text-white border border-white/10 shadow-lg">
@@ -630,7 +665,12 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           </div>
 
           {/* Back Side */}
-          <div className="absolute inset-0 backface-hidden rotate-y-180 rounded-theme overflow-hidden flex flex-col border-2 bg-theme-surface border-theme-border text-theme-text">
+          <div className={clsx(
+            "absolute inset-0 backface-hidden rotate-y-180 rounded-theme overflow-hidden flex flex-col border-2 bg-theme-surface border-theme-border text-theme-text",
+            // Mirror of the front-face guard: while showing the poster, the
+            // metadata face must not intercept clicks.
+            !isFlipped && "pointer-events-none"
+          )}>
             {/* Spotlight Effect */}
             <div className="absolute inset-0 pointer-events-none bg-gradient-to-tr from-theme-accent/5 via-transparent to-transparent opacity-50" />
             
@@ -662,12 +702,12 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                 onClick={handleBackRefresh}
                 disabled={isBackRefreshing}
                 className={clsx(
-                  "absolute top-2 right-2 md:top-3 md:right-3 z-20 p-1.5 md:p-2 rounded-full border transition-colors",
+                  "absolute top-2 right-2 md:top-3 md:right-3 z-20 flex items-center justify-center p-1.5 md:p-2 rounded-full border transition-colors",
                   "bg-theme-bg/60 backdrop-blur-md border-theme-border text-theme-subtext hover:text-theme-text hover:border-theme-accent",
                   isBackRefreshing && "opacity-60 cursor-not-allowed"
                 )}
                 aria-label={t('media_card.refresh')}
-                title={t('media_card.refresh_tooltip')}
+                title={isBackRefreshing ? t('media_card.refreshing') : t('media_card.refresh_tooltip')}
               >
                 <RefreshCw className={clsx("w-4 h-4", isBackRefreshing && "animate-spin")} />
               </button>
@@ -862,6 +902,16 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                         </div>
                       )}
                     </div>
+                  )}
+
+                  {/* Update-source disagreement (provenance conflict or a
+                      manual total a source tried to overwrite): kept stored
+                      by the update guard, shown so the count refusing to
+                      change is never silent. */}
+                  {item.updateConflict && (
+                    <p className="mt-2 text-[10px] leading-relaxed text-yellow-600 dark:text-yellow-500 bg-yellow-500/10 border border-yellow-500/20 rounded px-2 py-1">
+                      {item.updateConflict}
+                    </p>
                   )}
                 </div>
               )}

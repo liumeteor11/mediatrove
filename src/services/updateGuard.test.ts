@@ -265,19 +265,31 @@ const healed = buildUpdatePatch(legacy, cand({ totalEpisodes: 24, latestUpdateIn
 assert.strictEqual(healed?.totalEpisodes, 24, 'authoritative heals unprovenanced data');
 assert.ok(healed?.episodeSource && healed.episodeSource.kind === 'tmdb', 'healed update is stamped with TMDB provenance');
 
-// Manual edits outrank every automatic source: only growth gets through.
+// Manual edits pin the total completely: no automated source may move it —
+// growth included — so a correction survives every refresh (the "manually
+// fixed count reverts on next check" bug). Disagreements surface as a
+// conflict note instead of a silent overwrite.
 const manual = makeItem({
     totalEpisodes: 12,
     latestUpdateInfo: '全12集',
     episodeSource: { kind: 'manual', at: 1, total: 12 }
 });
+// A lower "全10集" claim reads as progress regression and is dropped outright.
 assert.strictEqual(
-    buildUpdatePatch(manual, cand({ totalEpisodes: 10, latestUpdateInfo: '全10集' }), true)?.totalEpisodes,
-    undefined,
-    'manual survives an authoritative decrease'
+    buildUpdatePatch(manual, cand({ totalEpisodes: 10, latestUpdateInfo: '全10集' }), true),
+    null,
+    'progress regression is dropped outright'
 );
+// A source that advances progress but claims a different total hits the
+// manual pin: value kept, disagreement surfaced, provenance preserved.
+const manualGrow = buildUpdatePatch(manual, cand({ totalEpisodes: 24, latestUpdateInfo: '第1季 第24集' }), true);
 assert.strictEqual(
-    buildUpdatePatch(manual, cand({ totalEpisodes: 24, latestUpdateInfo: '全24集' }), true)?.totalEpisodes,
-    24,
-    'manual accepts growth'
+    manualGrow?.totalEpisodes,
+    undefined,
+    'manual pins against authoritative growth too'
+);
+assert.ok(manualGrow?.updateConflict?.includes('手动值 12'), 'manual pin surfaces the disagreement');
+assert.ok(
+    manualGrow?.episodeSource === undefined || manualGrow.episodeSource.kind === 'manual',
+    'rejected source must not claim provenance over a manual value'
 );

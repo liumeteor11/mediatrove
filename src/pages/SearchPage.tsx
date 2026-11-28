@@ -225,7 +225,6 @@ export const SearchPage: React.FC = () => {
     setError(null);
     setIsTrending(false);
     setResults([]);
-    toast.info(t('search_page.searching_wait'));
     const startTs = performance.now();
     
     // Timeout warning
@@ -240,6 +239,10 @@ export const SearchPage: React.FC = () => {
       const data = await searchMedia(q, selectedType, (phase) => {
         // Phase updates from a superseded search must not overwrite the UI.
         if (isOpActive(opId)) useSearchStore.getState().setSearchPhase(phase);
+      }, (partial) => {
+        // API results (TMDB/Bangumi/plugins) land in 2-3s: render them while
+        // the AI round keeps running. The resolved list replaces this below.
+        if (isOpActive(opId)) setResults(partial);
       });
       clearTimeout(timeoutId);
       
@@ -445,7 +448,10 @@ export const SearchPage: React.FC = () => {
       }
     };
 
-    await Promise.all([worker(), worker(), worker()]);
+    // 5 workers: the poster ladder is now API-first (TMDB/Bangumi/iTunes/
+    // Google Books, sub-second per source), so more parallelism shortens the
+    // backfill tail without hammering any single host.
+    await Promise.all([worker(), worker(), worker(), worker(), worker()]);
     const finalArr = items.map(i => mergedById.get(i.id) || i);
     persist(finalArr);
     return finalArr;
@@ -652,6 +658,20 @@ export const SearchPage: React.FC = () => {
             )}
         </div>
 
+        {/* Trending status hint: cached content stays visible while a new AI
+            round runs in the background; without a cache the skeletons are
+            accompanied by an expectation-setting line instead of silence. */}
+        {isTrending && trendingLoading && (
+          <div className="flex items-center gap-2 text-xs text-theme-subtext animate-in fade-in duration-300">
+            <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+            <span>
+              {results.length > 0
+                ? t('search_page.trending_loading_hint_cached')
+                : t('search_page.trending_loading_hint')}
+            </span>
+          </div>
+        )}
+
         {error && (
             <div className="flex items-center justify-center p-8 rounded-xl border text-red-600 bg-red-50 border-red-100">
                 <AlertCircle className="w-6 h-6 mr-2" />
@@ -666,7 +686,9 @@ export const SearchPage: React.FC = () => {
           </div>
         )}
 
-        {(searchLoading || (trendingLoading && results.length === 0)) ? (
+        {/* Partial results render while the AI round is still running; the
+            skeleton only covers the window before the API sources answer. */}
+        {results.length === 0 && (searchLoading || trendingLoading) ? (
            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
               {[1, 2, 3, 4].map((i) => (
                 <div key={i} className="rounded-xl aspect-[1/1.48] animate-pulse border p-4 bg-theme-surface border-theme-border">

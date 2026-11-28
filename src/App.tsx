@@ -71,9 +71,11 @@ const App: React.FC = () => {
         const updates = await checkUpdates(itemsToCheck);
         
         let updateCount = 0;
+        const appliedIds = new Set<string>();
         updates.forEach(update => {
           const originalItem = itemsToCheck.find(i => i.id === update.id);
           if (originalItem) {
+             appliedIds.add(update.id);
              // Only update if info changed to avoid unnecessary writes
              if (update.latestUpdateInfo !== originalItem.latestUpdateInfo) {
                updateItem(update.id, {
@@ -95,6 +97,16 @@ const App: React.FC = () => {
              } else {
                updateItem(update.id, { lastCheckedAt: now });
              }
+          }
+        });
+        // Items that WERE checked but produced no accepted result — the
+        // update guard drops unverifiable/regressed entries — must still be
+        // stamped, otherwise every launch re-checks them (a minutes-long
+        // background run on every start) and the singleton lock keeps
+        // blocking manual refreshes during that window.
+        itemsToCheck.forEach(item => {
+          if (!appliedIds.has(item.id)) {
+            updateItem(item.id, { lastCheckedAt: now });
           }
         });
 

@@ -156,6 +156,14 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
     setIsSaving(true);
     try {
       const totalEpisodesNum = parseInt(editTotalEpisodes, 10);
+      // A hand-entered total is recorded with manual provenance: the update
+      // guard then pins it against every automated source (conflicts surface
+      // on the card instead), so a correction survives every refresh.
+      const manualTotal = hasSeasonStructure
+          ? undefined
+          : (Number.isFinite(totalEpisodesNum) && totalEpisodesNum > 0 ? totalEpisodesNum : undefined);
+      const totalChanged = manualTotal !== undefined && manualTotal !== item.totalEpisodes;
+      const totalCleared = manualTotal === undefined && item.totalEpisodes != null && item.episodeSource?.kind === 'manual';
       const updates: Partial<MediaItem> = {
         userReview: reviewContent,
         directorOrAuthor: editDirector,
@@ -165,9 +173,11 @@ export const EditMediaModal: React.FC<EditMediaModalProps> = ({ item, onClose, o
         userProgress: editUserProgress.trim() || undefined,
         // With structured seasons the per-season totals come from the TMDB
         // check; a flat total would be ignored by the grid anyway.
-        ...(hasSeasonStructure
-            ? {}
-            : { totalEpisodes: Number.isFinite(totalEpisodesNum) && totalEpisodesNum > 0 ? totalEpisodesNum : undefined }),
+        ...(hasSeasonStructure ? {} : { totalEpisodes: manualTotal }),
+        ...(totalChanged
+            ? { episodeSource: { kind: 'manual' as const, at: Date.now(), total: manualTotal } }
+            : {}),
+        ...(totalCleared ? { episodeSource: undefined } : {}),
         lastEditedAt: Date.now(),
       };
 

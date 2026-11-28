@@ -132,31 +132,37 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
   // Mirrors the re-add bump in addToCollection: a member inside a collection
   // folder surfaces the folder itself so the whole series moves forward while
   // the member keeps its place among its siblings.
-  bumpToFront: (id) => set((state) => {
-      const item = state.collection.find(i => i.id === id);
-      if (!item) return {};
-      const parent = item.parentCollectionId
-          ? state.collection.find(c => c.id === item.parentCollectionId)
-          : undefined;
-      const anchorItem = (item.isCollection || !parent) ? item : parent;
-      if (state.collection[0]?.id === anchorItem.id) return {};
+  bumpToFront: (id) => {
+      // DEFERRED like the pin re-sort (700ms): the bumped card flies to the
+      // front of the grid right after a successful update check, and an
+      // immediate reorder moves cards under the pointer — a follow-up click
+      // lands on a neighbor instead of the same card's buttons.
+      setTimeout(() => set((state) => {
+          const item = state.collection.find(i => i.id === id);
+          if (!item) return {};
+          const parent = item.parentCollectionId
+              ? state.collection.find(c => c.id === item.parentCollectionId)
+              : undefined;
+          const anchorItem = (item.isCollection || !parent) ? item : parent;
+          if (state.collection[0]?.id === anchorItem.id) return {};
 
-      const updatedCollection = [
-          anchorItem,
-          ...state.collection.filter(c => c.id !== anchorItem.id)
-      ];
+          const updatedCollection = [
+              anchorItem,
+              ...state.collection.filter(c => c.id !== anchorItem.id)
+          ];
 
-      if (isTauri) {
-          const username = useAuthStore.getState().user?.username;
-            if (!username) return;
-          const ids = updatedCollection.map(i => i.id);
-          invoke('reorder_collection', { username, ids }).catch(console.error);
-      } else {
-          localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
-      }
+          if (isTauri) {
+              const username = useAuthStore.getState().user?.username;
+                if (!username) return;
+              const ids = updatedCollection.map(i => i.id);
+              invoke('reorder_collection', { username, ids }).catch(console.error);
+          } else {
+              localStorage.setItem('media-tracker-collection', JSON.stringify({ state: { collection: updatedCollection }, version: 0 }));
+          }
 
-      return { collection: updatedCollection };
-  }),
+          return { collection: updatedCollection };
+      }), 700);
+  },
 
   exportCollection: async (targetPath?: string, redactSensitive: boolean = true) => {
     try {

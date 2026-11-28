@@ -6,17 +6,22 @@ import { McpPanel } from '../components/McpPanel';
 import { UpdateButton } from '../components/UpdateButton';
 import { ImportMediaModal } from '../components/ImportMediaModal';
 import { SyncModal } from '../components/SyncModal';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { CollectionCategory, MediaType, MediaItem } from '../types/types';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
-import { Bell, Upload, Activity, ChevronDown, ChevronUp, BarChart2, X, Wifi, LogOut } from 'lucide-react';
+import { Bell, Upload, Activity, ChevronDown, ChevronUp, BarChart2, X, Wifi, LogOut, Film, Tv, BookOpen, BookMarked, Clapperboard, Music, Shapes } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import { useNavigate } from 'react-router-dom';
 import { useAIStore } from '../store/useAIStore';
 import { toast } from 'react-toastify';
-import { testAuthoritativeDomain, clearSearchCache, checkUpdates } from '../services/aiService';
+import { testAuthoritativeDomain, clearSearchCache, checkUpdates, isUpdateCheckBusy } from '../services/aiService';
 import { AIIOLogEntry } from '../types/types';
+
+// Works that may resume updating after "finishing": the global check sweeps
+// these too, so a resurrected series is still discoverable on demand.
+const EPISODIC_TYPES = ['TV Series', 'Comic', 'Book', 'Short Drama'];
+const CHECK_BATCH_SIZE = 5;
 
 const YearlyReport: React.FC<{ collection: MediaItem[] }> = ({ collection }) => {
     const { t, i18n } = useTranslation();
@@ -181,6 +186,11 @@ export const DashboardPage: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isSyncOpen, setIsSyncOpen] = useState(false);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
+  // The global "check updates" run is search+AI over every tracked item: it
+  // costs minutes and AI tokens, so the bell button first opens a dialog that
+  // says what will happen (scope, batch count, background behavior) instead
+  // of silently starting a long job.
+  const [checkConfirmItems, setCheckConfirmItems] = useState<MediaItem[] | null>(null);
   const lastSearchDurationMs = useAIStore(s => s.lastSearchDurationMs);
   const lastSearchAt = useAIStore(s => s.lastSearchAt);
   const lastSearchQuery = useAIStore(s => s.lastSearchQuery);
@@ -201,11 +211,91 @@ export const DashboardPage: React.FC = () => {
     try { await navigator.clipboard.writeText(text); toast.success(t('dashboard.copied')); } catch {}
   };
 
+  const runGlobalUpdateCheck = async (ongoing: MediaItem[]) => {
+      if (isCheckingUpdates) return;
+      // A background check (app mount, collection toolbar, add-to-collection)
+      // may have taken the singleton lock meanwhile; say so instead of
+      // silently reporting "no new updates" for a check that never ran.
+      if (isUpdateCheckBusy()) {
+          toast.info(t('dashboard.check_busy'));
+          return;
+      }
+      setIsCheckingUpdates(true);
+      try {
+          toast.info(t('dashboard.checking_updates'));
+          const now = Date.now();
+          const updates = await checkUpdates(ongoing);
+          let count = 0;
+          const appliedIds = new Set<string>();
+          updates.forEach(u => {
+              const original = ongoing.find(i => i.id === u.id);
+              if (!original) return;
+              appliedIds.add(u.id);
+              const changed = u.latestUpdateInfo !== original.latestUpdateInfo;
+              updateItem(u.id, {
+                  latestUpdateInfo: u.latestUpdateInfo,
+                  isOngoing: u.isOngoing,
+                  ...(u.totalEpisodes ? { totalEpisodes: u.totalEpisodes } : {}),
+                  ...(u.seasons ? { seasons: u.seasons } : {}),
+                  ...(u.tmdbId ? { tmdbId: u.tmdbId, tmdbMediaType: u.tmdbMediaType } : {}),
+                  ...(u.episodeSource ? { episodeSource: u.episodeSource } : {}),
+                  ...(u.updateConflict !== undefined ? { updateConflict: u.updateConflict } : {}),
+                  lastCheckedAt: now,
+                  hasNewUpdate: changed ? true : original.hasNewUpdate
+              });
+              // New content floats the work to the front (not a pin).
+              if (changed && u.isOngoing) {
+                  bumpToFront(u.id);
+              }
+              if (changed) count++;
+          });
+          // Same stamp-everything rule as the app-mount sweep: guard-dropped
+          // entries were still checked and must not re-run on next launch.
+          ongoing.forEach(item => {
+              if (!appliedIds.has(item.id)) updateItem(item.id, { lastCheckedAt: now });
+          });
+          if (count > 0) {
+              toast.success(t('dashboard.updates_found', { count }));
+          } else {
+              toast.info(t('dashboard.no_new_updates'));
+          }
+      } catch {
+          toast.error(t('dashboard.update_check_failed'));
+      } finally {
+          setIsCheckingUpdates(false);
+      }
+  };
+
   const pieData = [
     { name: t('dashboard.status_watched'), value: stats.watched, color: '#22c55e' },
     { name: t('dashboard.to_watch'), value: stats.toWatch, color: '#3b82f6' },
     { name: t('dashboard.status_favorites'), value: stats.favorites, color: '#ef4444' },
   ].filter(d => d.value > 0);
+
+  // Donut geometry (hand-rolled SVG instead of a charting-library pie: one
+  // ring with a breathing gap between segments reads lighter than a full
+  // recharts rig for three values).
+  const DONUT_R = 72;
+  const DONUT_C = 2 * Math.PI * DONUT_R;
+  const pieSum = pieData.reduce((n, d) => n + d.value, 0);
+  let donutAcc = 0;
+  const donutSegments = pieData.map(d => {
+    const arc = (d.value / pieSum) * DONUT_C;
+    const seg = { ...d, frac: d.value / pieSum, offset: donutAcc, dash: Math.max(0, arc - (pieData.length > 1 ? 5 : 0)) };
+    donutAcc += arc;
+    return seg;
+  });
+
+  // Per-type icon + hue for the media-type breakdown.
+  const TYPE_META: Record<string, { icon: React.FC<{ className?: string }>; color: string }> = {
+    [MediaType.MOVIE]: { icon: Film, color: '#3b82f6' },
+    [MediaType.TV_SERIES]: { icon: Tv, color: '#8b5cf6' },
+    [MediaType.BOOK]: { icon: BookOpen, color: '#f59e0b' },
+    [MediaType.COMIC]: { icon: BookMarked, color: '#ec4899' },
+    [MediaType.SHORT_DRAMA]: { icon: Clapperboard, color: '#f43f5e' },
+    [MediaType.MUSIC]: { icon: Music, color: '#06b6d4' },
+    [MediaType.OTHER]: { icon: Shapes, color: '#64748b' },
+  };
 
   // Helper for localized type names
   const getLocalizedType = (type: string) => {
@@ -221,30 +311,21 @@ export const DashboardPage: React.FC = () => {
     }
   };
 
-  // Calculate types distribution
+  // Calculate types distribution (keeping the raw type so rows can pick an
+  // icon + hue from TYPE_META).
   const typeData = Object.values(collection.reduce((acc, item) => {
       const typeName = getLocalizedType(item.type);
-      acc[item.type] = acc[item.type] || { name: typeName, count: 0 };
+      acc[item.type] = acc[item.type] || { name: typeName, count: 0, type: item.type };
       acc[item.type].count++;
       return acc;
-  }, {} as Record<string, { name: string; count: number }>));
+  }, {} as Record<string, { name: string; count: number; type: string }>))
+  .sort((a, b) => b.count - a.count);
+  const typeMax = typeData.length > 0 ? typeData[0].count : 0;
 
   // Dynamic styles for charts based on CSS variables
-  // We can't easily use CSS variables in JS objects for Recharts without computing them.
-  // However, we can use a small mapping or just use "currentColor" where supported.
-  // For simplicity and reliability, let's just use a hook to get the computed style or simple conditional.
-  // Since we have specific themes, let's just use a simple lookup for chart specific colors if needed,
-  // or use CSS variables directly in string props which usually works for SVG attributes.
-  
-  const chartStyles = {
-    text: 'var(--text-secondary)',
-    grid: 'var(--border-color)',
-    tooltipBg: 'var(--bg-surface)',
-    tooltipBorder: 'var(--border-color)',
-    tooltipText: 'var(--text-primary)',
-    barFill: 'var(--accent-primary)',
-    pieStroke: 'var(--bg-surface)'
-  };
+  // Dynamic styles for charts based on CSS variables: the remaining recharts
+  // usage (YearlyReport) carries its own palette; the status/type cards use
+  // hand-rolled SVG/DOM with theme tokens directly.
 
   return (
     <>
@@ -253,57 +334,26 @@ export const DashboardPage: React.FC = () => {
         <h1 className="text-3xl font-bold text-theme-accent">{t('dashboard.title')}</h1>
         <div className="flex items-center gap-2">
             <button
-               onClick={async () => {
+               onClick={() => {
                    if (isCheckingUpdates) return;
                    // Ongoing items plus a slow resurrection sweep for ended
                    // episodic works (a "finished" show that starts updating
                    // again must still be discoverable on a manual check).
-                   const episodicTypes: string[] = ['TV Series', 'Comic', 'Book', 'Short Drama'];
                    const ongoing = collection.filter(item =>
                        item.notificationEnabled !== false &&
-                       (item.isOngoing || episodicTypes.includes(item.type))
+                       (item.isOngoing || EPISODIC_TYPES.includes(item.type))
                    );
                    if (ongoing.length === 0) {
                        toast.info(t('dashboard.no_ongoing_items'));
                        return;
                    }
-                   setIsCheckingUpdates(true);
-                   try {
-                       toast.info(t('dashboard.checking_updates'));
-                       const now = Date.now();
-                       const updates = await checkUpdates(ongoing);
-                       let count = 0;
-                       updates.forEach(u => {
-                           const original = ongoing.find(i => i.id === u.id);
-                           if (!original) return;
-                           const changed = u.latestUpdateInfo !== original.latestUpdateInfo;
-                           updateItem(u.id, {
-                               latestUpdateInfo: u.latestUpdateInfo,
-                               isOngoing: u.isOngoing,
-                               ...(u.totalEpisodes ? { totalEpisodes: u.totalEpisodes } : {}),
-                               ...(u.seasons ? { seasons: u.seasons } : {}),
-                               ...(u.tmdbId ? { tmdbId: u.tmdbId, tmdbMediaType: u.tmdbMediaType } : {}),
-                               ...(u.episodeSource ? { episodeSource: u.episodeSource } : {}),
-                               ...(u.updateConflict !== undefined ? { updateConflict: u.updateConflict } : {}),
-                               lastCheckedAt: now,
-                               hasNewUpdate: changed ? true : original.hasNewUpdate
-                           });
-                           // New content floats the work to the front (not a pin).
-                           if (changed && u.isOngoing) {
-                               bumpToFront(u.id);
-                           }
-                           if (changed) count++;
-                       });
-                       if (count > 0) {
-                           toast.success(t('dashboard.updates_found', { count }));
-                       } else {
-                           toast.info(t('dashboard.no_new_updates'));
-                       }
-                   } catch {
-                       toast.error(t('dashboard.update_check_failed'));
-                   } finally {
-                       setIsCheckingUpdates(false);
+                   if (isUpdateCheckBusy()) {
+                       toast.info(t('dashboard.check_busy'));
+                       return;
                    }
+                   // Confirm before launching: the sweep takes minutes and AI
+                   // tokens, and users deserve to know that up front.
+                   setCheckConfirmItems(ongoing);
                }}
                className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors text-theme-subtext hover:text-theme-text hover:bg-theme-surface/50 focus:outline-none focus:ring-2 focus:ring-theme-accent"
                title={t('dashboard.check_updates')}
@@ -551,85 +601,152 @@ export const DashboardPage: React.FC = () => {
         )}
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Status Distribution */}
-        <div className="p-6 rounded-theme shadow-theme border h-[400px] bg-theme-surface border-theme-border min-w-0">
-            <h3 className="text-lg font-bold mb-6 text-theme-text">{t('dashboard.collection_status')}</h3>
-            {pieData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={360}>
-                    <PieChart>
-                        <Pie
-                            data={pieData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={60}
-                            outerRadius={100}
-                            paddingAngle={5}
-                            dataKey="value"
-                            stroke={chartStyles.pieStroke}
-                        >
-                            {pieData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                        </Pie>
-                        <Tooltip 
-                          contentStyle={{ 
-                            backgroundColor: chartStyles.tooltipBg,
-                            borderColor: chartStyles.tooltipBorder,
-                            color: chartStyles.tooltipText
-                          }}
-                          itemStyle={{ color: chartStyles.tooltipText }}
+        {/* Status Distribution: hand-rolled donut with the total in the
+            center and a lightweight legend beside it. */}
+        <div className="p-6 rounded-theme shadow-theme border h-[400px] bg-theme-surface border-theme-border min-w-0 flex flex-col">
+            <h3 className="text-lg font-bold mb-2 text-theme-text">{t('dashboard.collection_status')}</h3>
+            {donutSegments.length > 0 ? (
+                <div className="flex-1 flex flex-col md:flex-row items-center justify-center gap-6 md:gap-8 animate-in fade-in duration-500">
+                  <div className="relative shrink-0">
+                    <svg viewBox="0 0 180 180" className="w-40 h-40 -rotate-90">
+                      <circle cx="90" cy="90" r={DONUT_R} fill="none" stroke="var(--border-color)" strokeWidth="13" opacity="0.3" />
+                      {donutSegments.map(s => (
+                        <circle
+                          key={s.name}
+                          cx="90" cy="90" r={DONUT_R}
+                          fill="none"
+                          stroke={s.color}
+                          strokeWidth="13"
+                          strokeDasharray={`${s.dash} ${DONUT_C - s.dash}`}
+                          strokeDashoffset={-s.offset}
+                          strokeLinecap={donutSegments.length === 1 ? 'round' : 'butt'}
+                          className="transition-all duration-700"
                         />
-                        <Legend verticalAlign="bottom" height={36}/>
-                    </PieChart>
-                </ResponsiveContainer>
+                      ))}
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <span className="text-3xl font-bold text-theme-text leading-none">{stats.total}</span>
+                      <span className="text-xs text-theme-subtext mt-1">{t('dashboard.total_collection')}</span>
+                    </div>
+                  </div>
+                  <div className="w-full max-w-[220px] space-y-3">
+                    {donutSegments.map((s, i) => (
+                      <div
+                        key={s.name}
+                        className="flex items-center gap-3 animate-in fade-in slide-in-from-right-2 duration-500"
+                        style={{ animationDelay: `${i * 80}ms` }}
+                      >
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+                        <span className="text-sm text-theme-text flex-1 truncate">{s.name}</span>
+                        <span className="text-sm font-semibold text-theme-text tabular-nums">{s.value}</span>
+                        <span className="text-xs text-theme-subtext tabular-nums w-10 text-right">{Math.round(s.frac * 100)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
             ) : (
-                <div className="h-full flex items-center justify-center text-theme-subtext">
-                    {t('dashboard.no_data')}
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 text-theme-subtext">
+                  <div className="w-12 h-12 rounded-full border-2 border-dashed border-theme-border flex items-center justify-center">
+                    <BarChart2 className="w-5 h-5 opacity-50" />
+                  </div>
+                  <p className="text-sm">{t('dashboard.no_data')}</p>
+                  <p className="text-xs opacity-70">{t('dashboard.chart_empty_hint')}</p>
                 </div>
             )}
         </div>
 
-        {/* Type Distribution */}
-        <div className="p-6 rounded-theme shadow-theme border h-[400px] bg-theme-surface border-theme-border min-w-0">
-             <h3 className="text-lg font-bold mb-6 text-theme-text">{t('dashboard.media_types')}</h3>
+        {/* Type Distribution: icon rows with proportional gradient bars —
+            lighter than a bar chart at a glance, still exact per row. */}
+        <div className="p-6 rounded-theme shadow-theme border h-[400px] bg-theme-surface border-theme-border min-w-0 flex flex-col">
+             <h3 className="text-lg font-bold mb-4 text-theme-text">{t('dashboard.media_types')}</h3>
              {typeData.length > 0 ? (
-                 <ResponsiveContainer width="100%" height={360}>
-                    <BarChart data={typeData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chartStyles.grid} />
-                        <XAxis 
-                          dataKey="name" 
-                          tick={{fontSize: 12, fill: chartStyles.text}} 
-                          interval={0} 
-                          angle={-30} 
-                          textAnchor="end" 
-                          height={60}
-                        />
-                        <YAxis 
-                          allowDecimals={false} 
-                          tick={{fill: chartStyles.text}}
-                        />
-                        <Tooltip 
-                          cursor={{fill: 'var(--bg-secondary)'}}
-                          contentStyle={{ 
-                            backgroundColor: chartStyles.tooltipBg,
-                            borderColor: chartStyles.tooltipBorder,
-                            color: chartStyles.tooltipText
-                          }}
-                          itemStyle={{ color: chartStyles.tooltipText }}
-                        />
-                        <Bar dataKey="count" fill={chartStyles.barFill} radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                 </ResponsiveContainer>
+                 <div className="flex-1 flex flex-col justify-center gap-3 overflow-y-auto custom-scrollbar pr-1">
+                    {typeData.map((row, i) => {
+                        const meta = TYPE_META[row.type] || TYPE_META[MediaType.OTHER];
+                        const Icon = meta.icon;
+                        const pct = typeMax > 0 ? Math.round((row.count / typeMax) * 100) : 0;
+                        return (
+                          <div
+                            key={row.type}
+                            className="animate-in fade-in slide-in-from-right-3 duration-500"
+                            style={{ animationDelay: `${i * 70}ms` }}
+                          >
+                            <div className="flex items-center gap-3 mb-1.5">
+                              <span
+                                className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-transform duration-300 hover:scale-110"
+                                style={{ backgroundColor: meta.color + '1f', color: meta.color }}
+                                title={row.name}
+                              >
+                                <Icon className="w-4 h-4" />
+                              </span>
+                              <span className="text-sm text-theme-text flex-1 truncate">{row.name}</span>
+                              <span className="text-sm font-semibold text-theme-text tabular-nums">{row.count}</span>
+                            </div>
+                            <div className="h-2 rounded-full bg-theme-border/40 overflow-hidden ml-10">
+                              <div
+                                className="h-full rounded-full transition-all duration-700"
+                                style={{
+                                  width: `${Math.max(6, pct)}%`,
+                                  background: `linear-gradient(90deg, ${meta.color}80, ${meta.color})`
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                    })}
+                 </div>
              ) : (
-                <div className="h-full flex items-center justify-center text-theme-subtext">
-                    {t('dashboard.no_data')}
-                </div>
+                 <div className="flex-1 flex flex-col items-center justify-center gap-2 text-theme-subtext">
+                   <div className="w-12 h-12 rounded-full border-2 border-dashed border-theme-border flex items-center justify-center">
+                     <BarChart2 className="w-5 h-5 opacity-50" />
+                   </div>
+                   <p className="text-sm">{t('dashboard.no_data')}</p>
+                   <p className="text-xs opacity-70">{t('dashboard.chart_empty_hint')}</p>
+                 </div>
              )}
         </div>
       </div>
       </div>
       {isImportModalOpen && <ImportMediaModal onClose={() => setIsImportModalOpen(false)} />}
       <SyncModal isOpen={isSyncOpen} onClose={() => setIsSyncOpen(false)} />
+
+      {/* Global update-check confirmation: states the scope, the batch/token
+          cost and the background behavior before a minutes-long AI sweep. */}
+      {checkConfirmItems && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setCheckConfirmItems(null)}>
+          <div className="bg-theme-surface border border-theme-border rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-theme-border">
+              <h3 className="text-lg font-bold text-theme-text">{t('dashboard.check_confirm_title')}</h3>
+            </div>
+            <div className="p-4 space-y-3 text-sm">
+              <p className="text-theme-text">{t('dashboard.check_confirm_count', { count: checkConfirmItems.length })}</p>
+              <div className="text-xs text-theme-subtext space-y-1.5 bg-theme-bg/50 border border-theme-border/50 rounded-lg p-3">
+                <p>{t('dashboard.check_confirm_batches', { batches: Math.ceil(checkConfirmItems.length / CHECK_BATCH_SIZE), tmdb: checkConfirmItems.filter(i => i.tmdbId).length })}</p>
+                <p>{t('dashboard.check_confirm_note')}</p>
+              </div>
+            </div>
+            <div className="p-4 border-t border-theme-border flex justify-end gap-2">
+              <button
+                onClick={() => setCheckConfirmItems(null)}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-theme-bg text-theme-text border border-theme-border hover:bg-theme-bg-hover transition-colors"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={async () => {
+                  const items = checkConfirmItems;
+                  setCheckConfirmItems(null);
+                  await runGlobalUpdateCheck(items);
+                }}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-theme-accent text-theme-bg hover:bg-theme-accent-hover transition-colors"
+              >
+                <Bell className="w-4 h-4" />
+                {t('dashboard.check_now')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

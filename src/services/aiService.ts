@@ -158,7 +158,10 @@ const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit & { 
 // best-effort accelerator: a slow model must not hold the whole search
 // hostage past the main AI round's own latency.
 const REWRITE_TIMEOUT_MS = 4000;
-const withTimeout = async <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
+// Bounds any awaitable and resolves to `fallback` past the deadline. Exported
+// for UI flows that must stay responsive (the media-card refresh button)
+// while the underlying backend call may legally run much longer.
+export const withTimeout = async <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<T>(resolve => { timer = setTimeout(() => resolve(fallback), ms); });
     try {
@@ -2503,7 +2506,13 @@ export const callAIStream = async (
 export const searchMedia = async (
   query: string,
   type?: MediaType | 'All',
-  onPhase?: (phase: SearchPhase) => void
+  onPhase?: (phase: SearchPhase) => void,
+  // Progressive rendering: invoked once the structured sources (TMDB /
+  // Bangumi / plugins) have answered — usually in 2-3s — with those items
+  // ranked by title relevance then rating. The UI shows them right away
+  // while the AI round keeps running; the resolved return value still
+  // carries the final full ranking and replaces the partial list.
+  onPartial?: (items: MediaItem[]) => void
 ): Promise<MediaItem[]> => {
   const q = query.trim();
   if (!q) return [];
@@ -2857,6 +2866,24 @@ export const searchMedia = async (
   // wording in the query, or a strong TV hit in the base results. These always
   // consult the AI so the newest season gets surfaced even on an exact match.
   const baseUniqueItems = Array.from(baseUnique.values());
+
+  // Emit the structured-source snapshot before the AI round: API answers are
+  // final data (real posters, ratings, ids), so the UI can render them at
+  // once — AI candidates then merge into the resolved list. Ordering here is
+  // TITLE RELEVANCE first (exact > containment > token overlap); the numeric
+  // rating only breaks ties within the same relevance class, it never lifts
+  // an unrelated-but-well-rated entry above a relevant one.
+  if (onPartial && baseUniqueItems.length > 0) {
+      const ratingNum = (r?: string): number => {
+          const m = /(\d+(?:\.\d+)?)/.exec(String(r || ''));
+          return m ? parseFloat(m[1]) : -1;
+      };
+      const rankedBase = baseUniqueItems
+          .map((it, idx) => ({ it, rel: relevanceScore(it.title), rate: ratingNum(it.rating), idx }))
+          .sort((a, b) => b.rel - a.rel || b.rate - a.rate || a.idx - b.idx)
+          .map(x => x.it);
+      try { onPartial(rankedBase); } catch {}
+  }
   const isSeriesTarget = type === MediaType.TV_SERIES
       || /第\s*[0-9一二三四五六七八九十]+\s*季|最新一?季|季播|番剧|分季/.test(q)
       || /\bseason\s*\d+\b|\bnew season\b|\bs\d{1,2}\s?e\d{1,2}\b|latest episode/i.test(q)
@@ -3633,6 +3660,12 @@ export const getSearchSnippets = async (query: string): Promise<string> => {
 
 let updatesCheckInFlight = false;
 
+// True while an update check (app-mount auto check, dashboard, collection
+// toolbar or AI-add) holds the singleton lock. Manual surfaces pre-check
+// this so a click during a long background check says "already running"
+// instead of silently returning no results.
+export const isUpdateCheckBusy = (): boolean => updatesCheckInFlight;
+
 // Results flowing out of checkUpdates are already vetted by the confidence
 // guard (src/services/updateGuard.ts): regressed progress is dropped entirely,
 // episode counts only change when the source is trustworthy, and unverifiable
@@ -4347,6 +4380,45 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
                 if (v?.image && await checkImage(v.image)) return v.image;
             } catch {}
         }
+        // 2b. iTunes album art (music; keyless, global coverage). For Latin
+        // titles it leads — Bangumi's Western album matching is loose; CJK
+        // titles try Bangumi first instead (block 2d below).
+        const kindLc = String(type || '').toLowerCase();
+        const titleIsZh = detectQueryLang(searchTitle) === 'zh';
+        const tryItunes = async (): Promise<string | undefined> => {
+            try {
+                const res = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(searchTitle)}&entity=album&limit=3`, { timeoutMs: 8000 });
+                if (res.ok) {
+                    const data = await res.json();
+                    const hit = Array.isArray(data?.results) ? data.results.find((r: any) => r?.artworkUrl100) : null;
+                    if (hit) {
+                        const art = normalizeImageUrl(String(hit.artworkUrl100).replace('100x100bb', '600x600bb'));
+                        if (art && await checkImage(art)) return art;
+                    }
+                }
+            } catch {}
+            return undefined;
+        };
+        if (kindLc === 'music' && !titleIsZh) {
+            const art = await tryItunes();
+            if (art) return art;
+        }
+        // 2c. Bangumi covers (books/comics/music/anime-adjacent series; keyless,
+        // strong for CJK — OMDb/TMDB are English-first and mostly miss these).
+        if (kindLc === 'book' || kindLc === 'comic' || kindLc === 'music' || kindLc === 'tv series') {
+            try {
+                const bType = kindLc === 'comic' ? 1 : kindLc === 'music' ? 3 : kindLc === 'book' ? 1 : 2;
+                const bg = await searchBangumi(searchTitle, bType);
+                const hit = Array.isArray(bg) ? bg.find((x: any) => x?.images?.large || x?.images?.common) : null;
+                const cov = hit ? normalizeImageUrl(String(hit.images.large || hit.images.common || '').replace(/^http:\/\//i, 'https://')) : undefined;
+                if (cov && await checkImage(cov)) return cov;
+            } catch {}
+        }
+        // 2d. iTunes for CJK music titles that Bangumi missed.
+        if (kindLc === 'music' && titleIsZh) {
+            const art = await tryItunes();
+            if (art) return art;
+        }
         // 3. OMDb (movies/series; English-first — the cross-language retry
         // below gives Chinese titles a second chance through it).
         const omdb = await fetchPosterFromOMDB(searchTitle, year);
@@ -4385,6 +4457,22 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
                 }
             }
         } catch {}
+        // 4b. Google Books covers (books; keyless, en+zh — the tail Bangumi
+        // misses for Western titles).
+        if (kindLc === 'book') {
+            try {
+                const res = await fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchTitle)}&maxResults=3`, { timeoutMs: 8000 });
+                if (res.ok) {
+                    const data = await res.json();
+                    const hit = Array.isArray(data?.items) ? data.items.find((i: any) => i?.volumeInfo?.imageLinks) : null;
+                    const thumb = hit?.volumeInfo?.imageLinks?.thumbnail || hit?.volumeInfo?.imageLinks?.smallThumbnail;
+                    if (thumb) {
+                        const cov = normalizeImageUrl(String(thumb).replace(/^http:\/\//i, 'https://').replace(/zoom=\d/, 'zoom=2'));
+                        if (cov && await checkImage(cov)) return cov;
+                    }
+                }
+            } catch {}
+        }
         return undefined;
     };
 
@@ -4715,10 +4803,15 @@ export const fetchPosterFromSearch = async (title: string, year: string, type: s
             const textQueryVariants = (() => {
                 const base = isChinese ? `${title} 海报` : `"${title}" poster`;
                 const all = [base, ...queryVariants];
-                return Array.from(new Set(all)).slice(0, 10);
+                return Array.from(new Set(all)).slice(0, 4);
             })();
 
-            const textProviders = providerList;
+            // The DuckDuckGo Instant Answer API is not a web search — poster
+            // queries through it came back empty in every logged session while
+            // costing 2-8s per candidate. Skip it here; the keyless API ladder
+            // (TMDB/Douban/Bangumi/iTunes/OMDb/Wikipedia/Google Books) covers
+            // the no-paid-provider case.
+            const textProviders = providerList.filter(p => p.provider !== 'duckduckgo');
             for (const qv of textQueryVariants) {
                 for (const p of textProviders) {
                     try {
