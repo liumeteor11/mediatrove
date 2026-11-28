@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import { toast } from 'react-toastify';
 import { checkUpdates, repairMediaItem, FALLBACK_POSTER, isPlaceholderPosterUrl } from '../services/aiService';
-import { getLocalPoster } from '../services/posterService';
+import { getLocalPoster, cachePoster, resolvePosterRetry } from '../services/posterService';
 
 // Episode-grid helpers. The app's progress convention is "the last number in
 // the string is the episode counter" for flat progress ("E30", "第 680 话"),
@@ -86,6 +86,10 @@ interface MediaCardProps {
   /** Render an explicit flip toggle on both faces (touch surfaces without
    *  hover, e.g. the mobile detail overlay). */
   showFlipToggle?: boolean;
+  /** Provided when the card is rendered inside a fullscreen detail overlay:
+   *  completing an interaction (pin/unpin) calls it to close the overlay
+   *  instead of just flipping back. */
+  onRequestClose?: () => void;
 }
 
 export const MediaCard: React.FC<MediaCardProps> = ({
@@ -100,6 +104,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   isSelectionMode,
   isSelected,
   onStartCollection,
+  onRequestClose,
   defaultFlipped = false,
   showFlipToggle = false
 }) => {
@@ -214,26 +219,86 @@ export const MediaCard: React.FC<MediaCardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imgSrc]);
 
-  const handleImageError = () => {
-      // Remote poster failed (expired CDN link, dead host, censored network):
-      // a local cached copy outranks the fallback — only mark the failure
-      // (which drives the repair sweeps) when there is no local copy either.
-      getLocalPoster(item.id).then((local) => {
-          if (local) {
-              setImgSrc(local);
-              setImgFailed(false);
-              setImgLoading(false);
-              if (item.posterFailedAt) updateItem(item.id, { posterFailedAt: undefined });
-              return;
-          }
-          setImgSrc(FALLBACK_POSTER);
-          setImgFailed(true);
+  // Recovery ladder for a broken poster (missing image, dead host, censored
+  // network, or an all-black frame): local cache → backend proxy download of
+  // the current URL → re-search an alternative via TMDB/OMDb/image search.
+  const recoverPoster = async () => {
+      const local = await getLocalPoster(item.id);
+      if (local && local !== imgSrc) {
+          setImgSrc(local);
+          setImgFailed(false);
           setImgLoading(false);
-          if (item.posterUrl && !item.customPosterUrl && !isPlaceholderPosterUrl(item.posterUrl) && !item.posterFailedAt) {
-              updateItem(item.id, { posterFailedAt: Date.now() });
+          if (item.posterFailedAt) updateItem(item.id, { posterFailedAt: undefined });
+          return;
+      }
+      // The webview may not reach the image host while the desktop backend
+      // can (proxy-aware download) — caching the current URL locally often
+      // fixes "posters never load" without changing the item.
+      if (item.posterUrl && !item.customPosterUrl && !isPlaceholderPosterUrl(item.posterUrl)) {
+          const ok = await cachePoster(item.id, item.posterUrl);
+          if (ok) {
+              const uri = await getLocalPoster(item.id);
+              if (uri && uri !== imgSrc) {
+                  setImgSrc(uri);
+                  setImgFailed(false);
+                  setImgLoading(false);
+                  if (item.posterFailedAt) updateItem(item.id, { posterFailedAt: undefined });
+                  return;
+              }
           }
-      });
+      }
+      const alt = await resolvePosterRetry(item);
+      if (alt) {
+          await cachePoster(item.id, alt);
+          const uri = await getLocalPoster(item.id);
+          setImgSrc(uri || alt);
+          setImgFailed(false);
+          setImgLoading(false);
+          updateItem(item.id, { posterUrl: alt, posterFailedAt: undefined });
+          return;
+      }
+      setImgSrc(FALLBACK_POSTER);
+      setImgFailed(true);
+      setImgLoading(false);
+      if (item.posterUrl && !item.customPosterUrl && !isPlaceholderPosterUrl(item.posterUrl) && !item.posterFailedAt) {
+          updateItem(item.id, { posterFailedAt: Date.now() });
+      }
   };
+
+  const handleImageError = () => {
+      void recoverPoster();
+  };
+
+  // A "loaded" image can still be useless: some CDNs answer broken requests
+  // with an all-black frame. Probe a CORS-enabled copy off-screen (canvas
+  // readback needs CORS; non-clean hosts fail the probe and are treated as
+  // fine rather than flagged incorrectly).
+  const probeAllBlack = (src: string): Promise<boolean> => new Promise((resolve) => {
+      try {
+          const probe = new Image();
+          probe.crossOrigin = 'anonymous';
+          probe.onload = () => {
+              try {
+                  const canvas = document.createElement('canvas');
+                  canvas.width = 8;
+                  canvas.height = 8;
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return resolve(false);
+                  ctx.drawImage(probe, 0, 0, 8, 8);
+                  const { data } = ctx.getImageData(0, 0, 8, 8);
+                  let sum = 0;
+                  for (let i = 0; i < data.length; i += 4) sum += data[i] + data[i + 1] + data[i + 2];
+                  resolve(sum / (data.length / 4) / 3 < 6);
+              } catch {
+                  resolve(false);
+              }
+          };
+          probe.onerror = () => resolve(false);
+          probe.src = src;
+      } catch {
+          resolve(false);
+      }
+  });
 
   const handleImageLoad = () => {
       setImgLoading(false);
@@ -242,6 +307,10 @@ export const MediaCard: React.FC<MediaCardProps> = ({
       if (imgSrc !== FALLBACK_POSTER && item.posterFailedAt) {
           updateItem(item.id, { posterFailedAt: undefined });
       }
+      if (imgSrc === FALLBACK_POSTER || item.customPosterUrl) return;
+      void probeAllBlack(imgSrc).then((black) => {
+          if (black) void recoverPoster();
+      });
   };
 
   const norm = (v?: string) => (v || '').trim();
@@ -389,6 +458,8 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                   const changed = update.latestUpdateInfo !== item.latestUpdateInfo;
                   updateItem(item.id, {
                       latestUpdateInfo: update.latestUpdateInfo,
+                      ...(update.episodeSource ? { episodeSource: update.episodeSource } : {}),
+                      ...(update.updateConflict !== undefined ? { updateConflict: update.updateConflict } : {}),
                       isOngoing: update.isOngoing,
                       ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
                       ...(update.seasons ? { seasons: update.seasons } : {}),
@@ -672,6 +743,16 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                         onClick={(e) => {
                             e.stopPropagation();
                             updateItem(item.id, { isPinned: !item.isPinned });
+                            // Pin/unpin completes the interaction: inside a
+                            // fullscreen overlay, close it and return to the
+                            // collection; on an inline grid card, flip back to
+                            // the front face instead of staying open while the
+                            // (deferred) re-sort moves it into place.
+                            if (onRequestClose) onRequestClose();
+                            else setIsFlipped(false);
+                            // Tell the collection grid to defer the re-sort for
+                            // a moment: the re-sort moves cards under the pointer.
+                            window.dispatchEvent(new CustomEvent('collection-pin-toggled', { detail: { id: item.id, value: !item.isPinned } }));
                         }}
                         className={clsx(
                           "p-1.5 md:p-2 rounded-lg border transition-colors",

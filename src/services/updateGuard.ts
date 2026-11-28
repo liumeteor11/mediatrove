@@ -1,10 +1,19 @@
-import type { MediaItem, SeasonInfo } from '../types/types';
+import type { MediaItem, SeasonInfo, EpisodeSource } from '../types/types';
 
 // Confidence layer between "newly retrieved data" (TMDB or AI) and the stored
 // record. Every automatic writer of tracking data funnels through
 // buildUpdatePatch, which compares old vs. new and refuses any change that
 // would regress watched progress, shrink a plausible episode count without a
 // trustworthy source, or write unverifiable AI guesses.
+
+// Trust ranking of information sources (lower = more trustworthy). The
+// STORED provenance (item.episodeSource) is compared against the INCOMING
+// source tier on every check: a weaker source may never overwrite a value
+// that came from a stronger one — growth and garbage-healing excepted.
+// Values stored before provenance existed have no source and count as the
+// weakest tier, keeping today's behavior for legacy data.
+const SOURCE_TIER: Record<string, number> = { manual: 0, tmdb: 1, official: 2, wiki: 3, aggregator: 4, ai: 5 };
+export const episodeSourceTier = (s?: EpisodeSource): number => (s ? (SOURCE_TIER[s.kind] ?? 5) : 5);
 
 // Progress embedded in free-text update info, as (season, episode). Both parts
 // are optional: comics/books track a flat chapter ("第1052章"), TV tracks
@@ -67,6 +76,7 @@ export interface UpdateCandidate {
     tmdbId?: number;
     tmdbMediaType?: 'movie' | 'tv';
     verified?: boolean;
+    sourceUrl?: string; // Page the counts were read from (persisted as provenance)
 }
 
 // The vetted result: fields that were rejected are simply absent, so callers
@@ -81,6 +91,8 @@ export interface SafeUpdate {
     seasons?: SeasonInfo[];
     tmdbId?: number;
     tmdbMediaType?: 'movie' | 'tv';
+    episodeSource?: EpisodeSource;
+    updateConflict?: string;
 }
 
 // The stored watched/claimed progress a new total must still cover. A
@@ -111,13 +123,17 @@ const progressFloor = (item: MediaItem, next: UpdateProgress | null): number => 
 const decideTotal = (
     stored: number | undefined,
     incoming: number,
-    opts: { authoritative: boolean; partial?: boolean; tmdbIdChanged: boolean; verified: boolean; floor: number }
+    opts: { authoritative: boolean; partial?: boolean; tmdbIdChanged: boolean; verified: boolean; floor: number; storedTier?: number; incomingTier?: number }
 ): number | undefined => {
     if (!plausibleCount(incoming)) return undefined;
     if (incoming < opts.floor) return undefined;
     if (stored == null) return incoming;               // fill gap
     if (isYearLike(stored)) return incoming;           // heal year-as-count garbage
     if (incoming >= stored) return incoming;           // growth is always safe
+    // Provenance gate: a weaker source may not talk a stronger-stored value
+    // down (real regression: AI "verified" counts overwriting authoritative
+    // TMDB data). Growth and garbage-healing above are still allowed.
+    if ((opts.storedTier ?? 5) < (opts.incomingTier ?? 5)) return undefined;
     if (opts.authoritative && opts.tmdbIdChanged) return incoming; // previous match was another show
     if (opts.authoritative && !opts.partial) return incoming;      // complete structured data
     if (!opts.authoritative && opts.verified) return incoming;     // verified AI correction
@@ -235,15 +251,36 @@ export const buildUpdatePatch = (
     // the user (grid click / edit modal), not by an update check. The floor is
     // derived from the text that will be stored plus the watched progress.
     const floor = progressFloor(item, parseUpdateProgress(info));
+    // Provenance: what the stored value came from vs. what this check is.
+    const storedTier = episodeSourceTier(item.episodeSource);
+    const incomingTier = authoritative ? 1 : (update.verified === true && update.sourceUrl ? 4 : 5);
     if (plausibleCount(update.totalEpisodes)) {
         const total = decideTotal(item.totalEpisodes, update.totalEpisodes, {
             authoritative,
             partial: update.totalEpisodesPartial,
             tmdbIdChanged: !!(item.tmdbId && update.tmdbId && item.tmdbId !== update.tmdbId),
             verified: update.verified === true,
-            floor
+            floor,
+            storedTier,
+            incomingTier
         });
-        if (total != null) patch.totalEpisodes = total;
+        if (total != null) {
+            patch.totalEpisodes = total;
+            patch.updateConflict = undefined; // a clean accepted update clears a past conflict
+        } else if (storedTier < incomingTier && item.totalEpisodes != null && update.totalEpisodes < item.totalEpisodes) {
+            // The rejection above was a provenance conflict, not junk: keep
+            // the stored value and surface the disagreement to the user.
+            const storedKind = item.episodeSource?.kind ?? 'legacy';
+            patch.updateConflict = `已保留 ${item.totalEpisodes} 集（信源 ${storedKind}${item.episodeSource?.url ? '，' + item.episodeSource.url : ''}）；${authoritative ? 'TMDB' : 'AI'} 信源声称 ${update.totalEpisodes} 集`;
+        }
+    }
+    if (patch.totalEpisodes != null || patch.seasons || patch.latestUpdateInfo !== item.latestUpdateInfo) {
+        patch.episodeSource = {
+            kind: authoritative ? 'tmdb' : (update.verified === true && update.sourceUrl ? 'aggregator' : 'ai'),
+            ...(update.sourceUrl ? { url: update.sourceUrl } : {}),
+            at: Date.now(),
+            ...(patch.totalEpisodes != null ? { total: patch.totalEpisodes } : {})
+        };
     }
     if (update.seasons && update.seasons.length > 0) {
         const seasons = mergeSeasons(item.seasons, update.seasons, {

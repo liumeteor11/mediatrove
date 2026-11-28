@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Loader2, TrendingUp, AlertCircle, RefreshCw, Edit, X, Save, RotateCcw, Info } from 'lucide-react';
-import { searchMedia, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
+import { searchMedia, checkUpdates, getTrendingMedia, fetchPosterFromSearch, performClientSideSearch, processSearchResult, refreshTrendingCache, isPlaceholderPosterUrl, canUseNativeSearch, getTrendingPromptKey } from '../services/aiService';
 import { recordLearnedAlias } from '../services/learnedAlias';
 import { MediaItem, CollectionCategory, MediaType, SearchPhase } from '../types/types';
 import { MediaCard } from '../components/MediaCard';
@@ -470,6 +470,10 @@ export const SearchPage: React.FC = () => {
     // so the next identical search hits the structured sources directly
     // (empty query = trending adds, nothing to learn from).
     recordLearnedAlias(query, item.title);
+    // Fetch tracking counts right away: a freshly added series has no episode
+    // data until an update check runs, and waiting for the next global sweep
+    // left the card without its episode grid.
+    void checkUpdates([{ ...item, id: item.id }]).catch(() => {});
     toast.success(t('search_page.added_to_collection', { title: item.title, category }));
   };
 

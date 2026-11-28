@@ -283,6 +283,8 @@ export const DashboardPage: React.FC = () => {
                                ...(u.totalEpisodes ? { totalEpisodes: u.totalEpisodes } : {}),
                                ...(u.seasons ? { seasons: u.seasons } : {}),
                                ...(u.tmdbId ? { tmdbId: u.tmdbId, tmdbMediaType: u.tmdbMediaType } : {}),
+                               ...(u.episodeSource ? { episodeSource: u.episodeSource } : {}),
+                               ...(u.updateConflict !== undefined ? { updateConflict: u.updateConflict } : {}),
                                lastCheckedAt: now,
                                hasNewUpdate: changed ? true : original.hasNewUpdate
                            });

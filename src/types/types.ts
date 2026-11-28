@@ -43,6 +43,8 @@ export interface MediaItem {
   userProgress?: string; // e.g. "S1E5" or "Chapter 10"
   totalEpisodes?: number; // Episode/chapter count of the current season (or whole work when finished); drives the episode grid
   seasons?: SeasonInfo[]; // Structured per-season counts (S1 N集 / S2 M集) from authoritative checks
+  episodeSource?: EpisodeSource; // Provenance of the accepted episode counts; later checks compare source reliability against it
+  updateConflict?: string; // Human-readable note when a weaker source claimed different counts than the stored trusted ones
   posterFailedAt?: number; // Last time posterUrl failed to load at runtime; makes repair sweeps re-fetch it
   posterLocalAt?: number; // Set when a local cached copy of the poster exists (survives URL decay and offline use)
   notificationEnabled?: boolean;
@@ -98,6 +100,19 @@ export interface SearchDiagnosticsQuota {
   unit: 'request' | 'token';
   amount: number;
   details?: any;
+}
+
+// Provenance of the accepted episode/update information. Lower `kind` trust
+// rank beats higher: a stored TMDB value must not be overwritten by an AI
+// claim, manual edits outrank everything (only growth is accepted on top).
+export type EpisodeSourceKind = 'manual' | 'tmdb' | 'official' | 'wiki' | 'aggregator' | 'ai';
+
+export interface EpisodeSource {
+  url?: string; // Clickable source page, shown in the item detail
+  kind: EpisodeSourceKind;
+  at: number; // When this source was recorded
+  total?: number; // The count this source reported (audit trail)
+  released?: number;
 }
 
 export interface SearchDiagnostics {

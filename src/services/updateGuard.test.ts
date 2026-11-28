@@ -232,3 +232,52 @@ const t8 = buildUpdatePatch(
 assert.strictEqual('userProgress' in t8, false, 'watched progress is never written by an update check');
 
 console.log('updateGuard tests passed');
+
+// ---- provenance tier gate (source reliability vs stored value) ----
+const tmdbStored = makeItem({
+    totalEpisodes: 24,
+    episodeSource: { kind: 'tmdb', at: 1, total: 24 },
+    latestUpdateInfo: '第2季 第24集'
+});
+// A weaker AI claim cannot shrink trusted TMDB counts, and the conflict is surfaced.
+const aiShrink = buildUpdatePatch(
+    tmdbStored,
+    cand({ totalEpisodes: 12, verified: true, latestUpdateInfo: '第2季 第24集', sourceUrl: 'https://example.com/cat' }),
+    false
+);
+assert.strictEqual(aiShrink?.totalEpisodes, undefined, 'weaker source cannot shrink trusted counts');
+assert.ok(aiShrink && aiShrink.updateConflict && aiShrink.updateConflict.includes('24'), 'conflict is surfaced for the user');
+assert.ok(aiShrink?.episodeSource === undefined, 'rejected source does not become provenance');
+
+// Growth from a weaker source still passes, and carries provenance.
+const aiGrow = buildUpdatePatch(
+    tmdbStored,
+    cand({ totalEpisodes: 30, verified: true, latestUpdateInfo: '第2季 第30集', sourceUrl: 'https://example.com/x' }),
+    false
+);
+assert.strictEqual(aiGrow?.totalEpisodes, 30, 'growth passes the tier gate');
+assert.ok(aiGrow?.episodeSource && aiGrow.episodeSource.kind === 'aggregator' && aiGrow.episodeSource.url === 'https://example.com/x', 'accepted update stores provenance');
+assert.ok(aiGrow?.updateConflict === undefined, 'accepted update clears a past conflict');
+
+// Authoritative TMDB heals a legacy value stored before provenance existed.
+const legacy = makeItem({ totalEpisodes: 12 });
+const healed = buildUpdatePatch(legacy, cand({ totalEpisodes: 24, latestUpdateInfo: '全24集' }), true);
+assert.strictEqual(healed?.totalEpisodes, 24, 'authoritative heals unprovenanced data');
+assert.ok(healed?.episodeSource && healed.episodeSource.kind === 'tmdb', 'healed update is stamped with TMDB provenance');
+
+// Manual edits outrank every automatic source: only growth gets through.
+const manual = makeItem({
+    totalEpisodes: 12,
+    latestUpdateInfo: '全12集',
+    episodeSource: { kind: 'manual', at: 1, total: 12 }
+});
+assert.strictEqual(
+    buildUpdatePatch(manual, cand({ totalEpisodes: 10, latestUpdateInfo: '全10集' }), true)?.totalEpisodes,
+    undefined,
+    'manual survives an authoritative decrease'
+);
+assert.strictEqual(
+    buildUpdatePatch(manual, cand({ totalEpisodes: 24, latestUpdateInfo: '全24集' }), true)?.totalEpisodes,
+    24,
+    'manual accepts growth'
+);

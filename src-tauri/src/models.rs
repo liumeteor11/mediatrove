@@ -75,6 +75,19 @@ pub struct SeasonInfo {
     pub released: Option<i32>,
 }
 
+/// Provenance of the accepted episode/update counts. The frontend update
+/// guard compares a new check's source reliability against this before
+/// touching trusted counts (a weaker source may never overwrite a stronger
+/// one; manual edits outrank everything).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodeSource {
+    pub url: Option<String>,
+    pub kind: String,
+    pub at: i64,
+    pub total: Option<i32>,
+    pub released: Option<i32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaItem {
     pub id: String,
@@ -109,6 +122,10 @@ pub struct MediaItem {
     pub seasons: Option<Vec<SeasonInfo>>,
     #[serde(rename = "posterFailedAt")]
     pub poster_failed_at: Option<u64>,
+    #[serde(rename = "episodeSource")]
+    pub episode_source: Option<EpisodeSource>,
+    #[serde(rename = "updateConflict")]
+    pub update_conflict: Option<String>,
     #[serde(rename = "posterLocalAt")]
     pub poster_local_at: Option<u64>,
     #[serde(rename = "notificationEnabled")]

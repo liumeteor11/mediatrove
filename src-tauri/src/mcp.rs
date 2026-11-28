@@ -625,6 +625,8 @@ async fn call_tool(
                 total_episodes: None,
                 seasons: None,
                 poster_failed_at: None,
+                episode_source: None,
+                update_conflict: None,
                 poster_local_at: None,
                 notification_enabled: None,
                 last_checked_at: None,

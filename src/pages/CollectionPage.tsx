@@ -93,6 +93,13 @@ export const CollectionPage: React.FC = () => {
   const [statusOpen, setStatusOpen] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // Pinning re-sorts the grid instantly, and the card under the pointer
+  // changes — a fast second click (intended as "unpin") used to land on
+  // another card's buttons and open the detail modal. The re-sort is now
+  // DEFERRED: for a short window (700ms) the visible order stays put (the pin badge
+  // still toggles), then the grid settles once the interaction is over.
+  const [pinOverride, setPinOverride] = useState<{ id: string; value: boolean } | null>(null);
+  const pinOverrideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -177,14 +184,15 @@ export const CollectionPage: React.FC = () => {
 
     const indexMap = new Map(collection.map((item, idx) => [item.id, idx]));
     const sorted = [...base].sort((a, b) => {
-        const ap = !!a.isPinned;
-        const bp = !!b.isPinned;
+        const effPin = (x: typeof a) => (pinOverride && pinOverride.id === x.id) ? pinOverride.value : !!x.isPinned;
+        const ap = effPin(a);
+        const bp = effPin(b);
         if (ap !== bp) return ap ? -1 : 1;
         return (indexMap.get(a.id) ?? 0) - (indexMap.get(b.id) ?? 0);
     });
 
     return sorted;
-  }, [collection, filter, typeFilter, searchTerm, viewingCollectionId, editMode]);
+  }, [collection, filter, typeFilter, searchTerm, viewingCollectionId, editMode, pinOverride]);
 
   // Mobile pagination: 3-column grid, 15 items per page. Desktop keeps the
   // single scrolling grid it has always had.
@@ -302,6 +310,8 @@ export const CollectionPage: React.FC = () => {
                   ...(update.totalEpisodes ? { totalEpisodes: update.totalEpisodes } : {}),
                   ...(update.seasons ? { seasons: update.seasons } : {}),
                   ...(update.tmdbId ? { tmdbId: update.tmdbId, tmdbMediaType: update.tmdbMediaType } : {}),
+                  ...(update.episodeSource ? { episodeSource: update.episodeSource } : {}),
+                  ...(update.updateConflict !== undefined ? { updateConflict: update.updateConflict } : {}),
                   lastCheckedAt: now,
                   hasNewUpdate: changed ? true : original.hasNewUpdate
                 });
@@ -383,6 +393,16 @@ export const CollectionPage: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     document.addEventListener('mousedown', handleClickOutside);
+    // Grid interaction lock right after a pin toggle: the re-sort moves the
+    // card under the pointer, and a fast second click used to land on another
+    // card's buttons (opening the detail modal) — see pin double-click bug.
+    const deferSort = (e: Event) => {
+        const detail = (e as CustomEvent).detail || {};
+        setPinOverride({ id: String(detail.id || ''), value: !!detail.value });
+        if (pinOverrideTimer.current) clearTimeout(pinOverrideTimer.current);
+        pinOverrideTimer.current = setTimeout(() => setPinOverride(null), 700);
+    };
+    window.addEventListener('collection-pin-toggled', deferSort);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handleClickOutside);
@@ -910,6 +930,7 @@ export const CollectionPage: React.FC = () => {
                         showActions={true}
                         className="w-full h-full"
                         variant="collection"
+                        onRequestClose={() => setSelectedId(null)}
                         // On touch screens there is no hover-flip, so start the
                         // detail card on the metadata face (Edit/actions are
                         // there) and offer an explicit poster toggle.

@@ -81,9 +81,12 @@ export const Navbar: React.FC = () => {
             <span className="font-bold text-xl tracking-tight text-theme-text font-theme">MediaTrove</span>
           </Link>
           {aiDate && (
-            <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-theme text-sm font-medium text-theme-subtext bg-theme-surface/50" title={aiDate}>
+            // Date + daily motto stay on one line: the pill is width-capped
+            // and the text truncates with an ellipsis; the title attribute
+            // surfaces the full string on hover.
+            <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-theme text-sm font-medium text-theme-subtext bg-theme-surface/50 max-w-[15rem] xl:max-w-[26rem] overflow-hidden" title={aiDate}>
               <Calendar className="w-4 h-4 flex-shrink-0" />
-              <span>{aiDate}</span>
+              <span className="truncate whitespace-nowrap min-w-0">{aiDate}</span>
             </div>
           )}
           

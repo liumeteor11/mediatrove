@@ -3644,6 +3644,8 @@ export interface UpdateCheckResult extends SafeUpdate {
   // True when the AI actually confirmed the entry via its search tool or the
   // supplied engine/Wikipedia excerpts; unverified entries are never applied.
   verified?: boolean;
+  // Page the counts were read from (persisted as provenance on the item).
+  sourceUrl?: string;
 }
 
 export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResult[]> => {
@@ -3750,7 +3752,9 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                   totalEpisodesPartial: ongoing,
                   seasons,
                   tmdbId,
-                  tmdbMediaType: 'tv'
+                  tmdbMediaType: 'tv',
+                  // Structured provenance: the check compared against this page.
+                  sourceUrl: `https://www.themoviedb.org/tv/${tmdbId}`
               };
           }
           return null;
@@ -3761,7 +3765,16 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
       // so the year window alone is never enough — the candidate title must
       // also be recognizably the same work.
       const resolveTmdbTvId = async (it: MediaItem): Promise<number | undefined> => {
-          const { base } = parseSeasonSuffix(it.title);
+          // AI-added titles are decorated and season-suffixed ("《乱马1/2》 第三季
+          // （新版动画）"), which TMDB search matches poorly — the counts check
+          // then finds nothing and the item never shows an episode grid. Try
+          // the raw title first, then progressively cleaned variants (book
+          // marks stripped, season tail stripped); first resolved hit wins.
+          const cleaned = it.title.replace(/[《》「」『』]/g, '').trim();
+          const stripped = cleaned.replace(/第\s*[零一二三四五六七八九十\d]+\s*[季期][^》]*$/, '').trim();
+          const attempts: string[] = [it.title, ...(cleaned !== it.title ? [cleaned] : []), ...(stripped && stripped !== cleaned ? [stripped] : [])];
+          const attemptResolve = async (titleVariant: string): Promise<number | undefined> => {
+          const { base } = parseSeasonSuffix(titleVariant);
           const candidates = await searchTMDB(base, 'tv', tmdbLanguageForItem(it));
           if (!candidates || candidates.length === 0) return undefined;
           // TMDB titles often carry a disambiguating year ("Ranma½ (2024)");
@@ -3808,6 +3821,12 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           const byTitle = candidates.find((c: any) => yearOk(c) && candNames(c).includes(nTitle))
               || candidates.find((c: any) => yearOk(c) && candNames(c).includes(nBase));
           return byTitle && typeof byTitle.id === 'number' ? byTitle.id : undefined;
+      };
+      for (const variant of attempts) {
+          const id = await attemptResolve(variant);
+          if (id != null) return id;
+      }
+      return undefined;
       };
 
       const authoritativeUpdates: UpdateCheckResult[] = [];
@@ -3941,6 +3960,7 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           - isOngoing: 布尔值 (如果仍在更新则为 true, 完结为 false)
           - verified: 布尔值 (仅当该条信息确实通过搜索工具或上述检索结果核实后才为 true；未经核实必须为 false)
           - totalEpisodes: 数字 (可选；仅当检索结果明确给出该作品当前季或全篇的总集数/总章数时才返回，严禁估算)
+          - sourceUrl: 字符串 (可选；信息来源页面的真实链接，必须来自上述搜索结果，严禁编造)
 
           [注意]
           1. 如果有搜索结果，请优先依据搜索结果判断。
@@ -3968,6 +3988,7 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
           - isOngoing: boolean (true if still updating, false if ended)
           - verified: boolean (true ONLY if you actually confirmed this entry via your search tool or the reference sources above; otherwise false)
           - totalEpisodes: number (optional; only when the sources explicitly state the season/series total — never estimate it)
+          - sourceUrl: string (optional; the real link of the source page — must come from the search results above, never invent one)
 
           [Note]
           1. Prioritize the provided search results.
@@ -4044,6 +4065,7 @@ export const checkUpdates = async (items: MediaItem[]): Promise<UpdateCheckResul
                               latestUpdateInfo: updateText,
                               isOngoing: u.isOngoing === true,
                               verified: true,
+                              ...(typeof u.sourceUrl === 'string' && u.sourceUrl.trim() ? { sourceUrl: u.sourceUrl.trim() } : {}),
                               ...(typeof u.totalEpisodes === 'number' && Number.isFinite(u.totalEpisodes) && u.totalEpisodes > 0
                                   ? { totalEpisodes: u.totalEpisodes }
                                   : {})

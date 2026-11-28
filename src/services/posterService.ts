@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { MediaItem } from '../types/types';
-import { isPlaceholderPosterUrl } from './aiService';
+import { isPlaceholderPosterUrl, fetchPosterFromSearch } from './aiService';
 
 /**
  * Posters are cached as local files (app_data/posters/{id}.img) by the Rust
@@ -80,3 +80,25 @@ export const sweepPosterCache = (items: MediaItem[], updateItem: (id: string, up
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const retryAt = new Map<string, number>();
+const RETRY_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Re-searches an alternative poster for an item whose image failed to load
+ * (missing / placeholder / all-black). A per-item cooldown prevents fetch
+ * loops when every source is unreachable. Returns a usable URL or undefined.
+ */
+export const resolvePosterRetry = async (item: MediaItem): Promise<string | undefined> => {
+    if (item.customPosterUrl || !item.title) return undefined;
+    const now = Date.now();
+    if (now - (retryAt.get(item.id) || 0) < RETRY_COOLDOWN_MS) return undefined;
+    retryAt.set(item.id, now);
+    try {
+        const year = (item.releaseDate || '').split('-')[0] || '';
+        const { picked } = await fetchPosterFromSearch(item.title, year, item.type);
+        return picked || undefined;
+    } catch {
+        return undefined;
+    }
+};
